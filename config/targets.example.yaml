@@ -1,0 +1,16 @@
+targets:
+  knwldg:
+    label: "knwldg"
+    base_url: "http://127.0.0.1:8642"
+    api_key_env: "KNWLDG_API_SERVER_KEY"
+    default_session_key: "voice-console:knwldg"
+    preferred_transport: "runs"
+    voice:
+      tts_voice: "default"
+
+  example-remote-agent:
+    label: "Example Remote Agent"
+    base_url: "http://100.64.x.y:8642"
+    api_key_env: "EXAMPLE_AGENT_API_SERVER_KEY"
+    default_session_key: "voice-console:example-remote-agent"
+    preferred_transport: "runs"

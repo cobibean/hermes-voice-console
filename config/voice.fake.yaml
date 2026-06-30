@@ -1,0 +1,18 @@
+server:
+  host: "127.0.0.1"
+  port: 8787
+  public_base_url: "http://localhost:8787"
+  auth_required: true
+
+voice:
+  stt_provider: "fake"
+  tts_provider: "fake"
+  sample_rate: 16000
+  max_recording_seconds: 120
+  max_recording_wall_seconds: 180
+  max_buffer_mb: 25
+  max_tts_text_chars: 8000
+  max_tts_audio_mb: 50
+  speak_replies_default: true
+  retain_audio_debug: false
+  fake_transcript: "hello fake hermes"

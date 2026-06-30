@@ -1,0 +1,31 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+build/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.DS_Store
+.agent/runs/*/evidence/*.log
+
+# Voice/audio debug artifacts can contain private speech.
+*.wav
+*.mp3
+*.ogg
+*.webm
+*.pcm
+voice-console-audio/
+audio-debug/
+
+# Local target configs may name private agents/tailnet hosts. Keep examples tracked.
+config/targets.local.yaml
+config/targets.private.yaml

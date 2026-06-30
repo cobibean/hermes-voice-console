@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Standalone Hermes Voice Console Goal Ledger</title>
+<style>
+body{font-family:Inter,system-ui,sans-serif;line-height:1.5;margin:0;background:#0b1020;color:#e7edf7}
+main{max-width:1100px;margin:0 auto;padding:32px}section{background:#121a31;border:1px solid #263452;border-radius:16px;padding:20px;margin:18px 0}
+.status{display:inline-block;border-radius:999px;padding:3px 10px;background:#174d2b;color:#bdf7ca}.event{border-left:3px solid #6aa6ff;padding-left:12px;margin:10px 0}
+code{background:#0a0f1e;padding:2px 5px;border-radius:5px}a{color:#8fc7ff}li{margin:4px 0}pre{white-space:pre-wrap;background:#0a0f1e;padding:12px;border-radius:8px;overflow:auto}
+</style></head><body><main>
+<h1>Standalone Hermes Voice Console</h1>
+<section id="resume"><h2>Resume Here</h2><ul>
+<li><strong>Status:</strong> <span class="status">[done]</span> automated gates complete; ready for human real-smoke testing.</li>
+<li><strong>Current phase:</strong> final gate / handoff.</li>
+<li><strong>Completed work:</strong> Built standalone backend, frontend, fake target, fake E2E, docs, tests, and project memory without patching Hermes source.</li>
+<li><strong>Active work:</strong> None. The remaining step is external/manual real browser + mic + STT/TTS + live Hermes target smoke.</li>
+<li><strong>Blockers:</strong> This environment lacked real provider env vars, a real target API key, and GUI display; `/dev/snd` exists but `DISPLAY`/`WAYLAND_DISPLAY` are missing.</li>
+<li><strong>Next exact action:</strong> From a real browser/mic environment, configure `config/voice.yaml`, `config/targets.yaml`, `.env`, run `voice-console serve --config config/voice.yaml --targets config/targets.yaml`, then follow `docs/manual-smoke-checklist.md`.</li>
+<li><strong>Last validation:</strong> 2026-06-16T18:09:53+00:00 — backend tests, frontend lint/typecheck/tests/build, fake E2E, browser fake connect/probe, secret scan, and diff whitespace check passed.</li>
+<li><strong>Protected paths/user-owned work:</strong> `/root/.hermes/hermes-agent` was not modified; prior review/reference checkouts were not used as implementation targets.</li>
+</ul></section>
+<section><h2>Decisions Outside The Spec</h2><ul>
+<li>Used temporary localhost port <code>8788</code> for final fake browser smoke because <code>8787</code> was already occupied.</li>
+<li>Real manual smoke is explicitly left as the final human gate due missing provider credentials/real target/display in this environment.</li>
+</ul></section>
+<section><h2>Changes And Tradeoffs</h2>
+<ul>
+<li>Backend FastAPI service implements console auth, YAML/env config, target registry, Hermes API Server client, `/v1/runs` transport, approval/stop, WebSocket voice protocol, recording caps, fake/real STT/TTS providers, and temp audio guards.</li>
+<li>Frontend React/Vite app implements token unlock, target/session selectors, push-to-talk, ready/start acknowledgement sequencing, transcript/response panels, run timeline, approval modal, stop/cancel controls, diagnostics, and turn-aware playback.</li>
+<li>Fake target and fake E2E provide deterministic verification when real provider/mic access is unavailable.</li>
+<li>Docs cover configuration, target API Server setup, security, manual smoke, troubleshooting, rollback/uninstall, and systemd example.</li>
+</ul>
+</section>
+<section><h2>Validation</h2><ul>
+<li><code>source .venv/bin/activate && pytest tests/backend -q</code> — PASS, 15 tests.</li>
+<li><code>cd frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm build</code> — PASS, ESLint/TypeScript/Vitest/Vite build; Vitest 4 files / 9 tests.</li>
+<li><code>source .venv/bin/activate && voice-console fake-e2e</code> — PASS, returned <code>ok: true</code>, expected run/TTS frames, and <code>binary_chunks: 1</code>.</li>
+<li>Secret scan — PASS, no high-risk token patterns outside ignored runtime/dependency directories.</li>
+<li><code>git diff --check</code> — PASS.</li>
+<li>Browser fake smoke — PASS, loaded console, token unlock succeeded, fake target UI rendered, connect/probe produced <code>Connected: yes</code> and a <code>ready</code> timeline event.</li>
+<li>Hermes source boundary — PASS, `/root/.hermes/hermes-agent` showed no local modifications.</li>
+</ul></section>
+<section><h2>Evidence</h2><ul>
+<li>Final validation evidence: <code>.agent/runs/2026-06-16-standalone-hermes-voice-console/evidence/final-validation.md</code></li>
+<li>Project memory: <code>docs/memory/2026-06-16/standalone-voice-console-memory-2026-06-16.md</code></li>
+<li>Manual human test checklist: <code>docs/manual-smoke-checklist.md</code></li>
+<li>Plan: <code>docs/standalone-voice-console-plan.md</code></li>
+<li>Build prompt: <code>docs/prompts/build-goal.md</code></li>
+</ul></section>
+<section><h2>Progress Timeline</h2><div id="timeline"></div></section>
+<script>
+const progressEvents = [
+  { ts: "2026-06-16T16:53:56+00:00", status: "doing", phase: "inspection", actor: "knwldg", summary: "Read approved plan/build prompt, checked git state, found no project memory, inspected reference drop files for reusable lessons and known pitfalls.", evidence: ["docs/standalone-voice-console-plan.md", "docs/prompts/build-goal.md", "/root/DEV/review/hermes-voice-feature-c20818a"] },
+  { ts: "2026-06-16T16:58:00+00:00", status: "doing", phase: "ledger-init", actor: "knwldg", summary: "Created .agent goal ledger before coding with protected paths and fake-vs-real smoke gates.", evidence: [".agent/GOALS.md", ".agent/runs/2026-06-16-standalone-hermes-voice-console/GOAL.md"] },
+  { ts: "2026-06-16T17:20:00+00:00", status: "doing", phase: "implementation", actor: "knwldg", summary: "Implemented backend, frontend, fake target, fake E2E, and docs; initial automated gates passed before independent review hardening.", evidence: ["backend/voice_console", "frontend/src", "tests/backend", "docs/"] },
+  { ts: "2026-06-16T17:43:00+00:00", status: "doing", phase: "review-hardening", actor: "knwldg", summary: "Incorporated review findings: full capability gate, duplicate hello rejection, proactive timeout, active-run guard, TTS cleanup, frontend ready/start sequencing, early-release handling, approval context, stale filtering, and focused tests.", evidence: ["backend/voice_console/hermes_client.py", "backend/voice_console/app.py", "frontend/src/lib/voiceClient.ts", "frontend/src/App.tsx"] },
+  { ts: "2026-06-16T18:09:53+00:00", status: "done", phase: "final-gates", actor: "knwldg", summary: "Backend tests, frontend lint/typecheck/tests/build, fake E2E, secret scan, diff whitespace check, and browser fake connect/probe all passed. Real mic/provider smoke remains manual due environment prerequisites.", evidence: [".agent/runs/2026-06-16-standalone-hermes-voice-console/evidence/final-validation.md", "docs/manual-smoke-checklist.md"] }
+];
+document.getElementById('timeline').innerHTML = progressEvents.map(e => `<div class="event"><strong>${e.ts}</strong> <code>${e.status}</code> <em>${e.phase}</em><br>${e.summary}${e.evidence?.length ? '<br>Evidence: '+e.evidence.map(x=>`<code>${x}</code>`).join(', ') : ''}</div>`).join('');
+</script>
+</main></body></html>
