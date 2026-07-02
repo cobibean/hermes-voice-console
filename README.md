@@ -24,6 +24,8 @@ This repository is intentionally separate from `NousResearch/hermes-agent` and f
 - Operator docs under `docs/`.
 - `.agent` goal ledger for this implementation.
 
+For the Mac mini / phone / laptop rollout path, see `docs/remote-rollout-next-steps.md`.
+
 ## Quickstart: deterministic fake E2E
 
 ```bash
