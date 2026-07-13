@@ -23,6 +23,7 @@ def create_fake_hermes_app() -> FastAPI:
     app.state.run_status = {}
     app.state.run_payloads = []
     app.state.sessions = {}
+    app.state.stopped_runs = set()
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -45,6 +46,16 @@ def create_fake_hermes_app() -> FastAPI:
         if not _auth_ok(request):
             raise HTTPException(status_code=401, detail="Invalid API key")
         return {"models": [{"alias": "fake", "provider": "fake"}]}
+
+    @app.get("/test/state")
+    async def test_state(request: Request) -> dict[str, Any]:
+        """Expose non-secret counters for deterministic browser acceptance tests."""
+        if not _auth_ok(request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return {
+            "run_count": len(app.state.run_payloads),
+            "runs": list(app.state.run_status.values()),
+        }
 
     @app.get("/v1/capabilities")
     async def capabilities(request: Request) -> dict[str, Any]:
@@ -141,9 +152,16 @@ def create_fake_hermes_app() -> FastAPI:
                     "timestamp": time.time(),
                     "tool": "fake_tool",
                     "duration": 0.001,
-                    "error": False,
+                    "error": "failed tool" in text.lower(),
                 }
             )
+            if "drop sse" in text.lower():
+                await queue.put(None)
+                await asyncio.sleep(0.25)
+                output = f"Fake response to: {text}"
+                app.state.sessions[session_id].append({"role": "assistant", "content": output})
+                app.state.run_status[run_id].update({"status": "completed", "output": output})
+                return
             if "approval" in text.lower():
                 app.state.run_status[run_id]["status"] = "waiting_for_approval"
                 await queue.put(
@@ -152,11 +170,22 @@ def create_fake_hermes_app() -> FastAPI:
                         "run_id": run_id,
                         "timestamp": time.time(),
                         "message": "Approve fake action?",
+                        "tool": "fake_tool",
+                        "operation": "write test artifact",
+                        "path": "/tmp/browser-acceptance/" + "nested/" * 24 + "artifact.txt",
+                        "reason": "Exercise long approval details without changing external state.",
                         "choices": ["once", "session", "always", "deny"],
                     }
                 )
                 await approval_event.wait()
                 app.state.run_status[run_id]["status"] = "running"
+            if "slow run" in text.lower():
+                for _ in range(20):
+                    if run_id in app.state.stopped_runs:
+                        return
+                    await asyncio.sleep(0.1)
+            if run_id in app.state.stopped_runs:
+                return
             output = f"Fake response to: {text}"
             history = body.get("conversation_history") or []
             if "recall nonce" in text.lower() and history:
@@ -188,6 +217,8 @@ def create_fake_hermes_app() -> FastAPI:
             await queue.put(None)
 
         asyncio.create_task(produce())
+        if "delayed acceptance" in text.lower():
+            await asyncio.sleep(0.75)
         return {"run_id": run_id, "status": "started"}
 
     @app.get("/v1/runs/{run_id}")
@@ -242,6 +273,7 @@ def create_fake_hermes_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Run not found")
         await queue.put({"event": "run.cancelled", "run_id": run_id, "timestamp": time.time()})
         await queue.put(None)
+        app.state.stopped_runs.add(run_id)
         app.state.run_status[run_id]["status"] = "cancelled"
         return {"run_id": run_id, "status": "stopping"}
 

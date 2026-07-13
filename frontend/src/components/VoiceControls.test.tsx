@@ -6,6 +6,7 @@ function renderControls(overrides: Partial<Parameters<typeof VoiceControls>[0]> 
   const props: Parameters<typeof VoiceControls>[0] = {
     recording: 'recording',
     supported: true,
+    ready: true,
     speakReplies: true,
     onSpeakReplies: vi.fn(),
     onStart: vi.fn(),

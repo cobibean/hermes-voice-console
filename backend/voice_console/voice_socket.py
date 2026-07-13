@@ -72,14 +72,27 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
     recording_timeout_task: asyncio.Task[None] | None = None
     speak_replies = state.config.voice.speak_replies_default
     auth_watchdog_task: asyncio.Task[None] | None = None
+    socket_attached = True
 
     async def send_json(payload: dict[str, Any]) -> None:
-        async with send_lock:
-            await ws.send_json(payload)
+        nonlocal socket_attached
+        if not socket_attached:
+            return
+        try:
+            async with send_lock:
+                await ws.send_json(payload)
+        except (WebSocketDisconnect, RuntimeError):
+            socket_attached = False
 
     async def send_bytes(payload: bytes) -> None:
-        async with send_lock:
-            await ws.send_bytes(payload)
+        nonlocal socket_attached
+        if not socket_attached:
+            return
+        try:
+            async with send_lock:
+                await ws.send_bytes(payload)
+        except (WebSocketDisconnect, RuntimeError):
+            socket_attached = False
 
     async def send_error(exc: VoiceProtocolError) -> None:
         await send_json(error_frame(exc))
@@ -132,8 +145,11 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                 if event.get("type") == "agent.completed":
                     final_text = str(event.get("text") or "")
                 await send_json(event)
+                if not socket_attached:
+                    return
             if (
                 allow_tts
+                and socket_attached
                 and speak_replies
                 and final_text.strip()
                 and not recording_session.is_cancelled(turn_id)
@@ -529,6 +545,7 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        socket_attached = False
         if subscription_task and not subscription_task.done():
             subscription_task.cancel()
         if subscribed_run_id and subscription_queue:

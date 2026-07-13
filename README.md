@@ -18,7 +18,8 @@ This repository is intentionally separate from `NousResearch/hermes-agent` and f
 - React/TypeScript/Vite frontend (`frontend`) with:
   - target/session selectors;
   - tap-to-record mic capture using an AudioWorklet PCM16/16k worklet;
-  - transcript, run timeline, diagnostics, approval modal, stop/cancel controls;
+  - persistent conversation history with inline tool-call state, plus the full run timeline and diagnostics;
+  - accessible approval modal, explicit run stop, and independent speech cancellation;
   - generation-aware playback queue that drops stale/canceled TTS chunks.
 - Fake Hermes API Server target and one-command fake E2E (`voice-console fake-e2e`).
 - Operator docs under `docs/`.
@@ -80,9 +81,15 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm exec playwright install chromium
+pnpm test:e2e
 cd ..
 voice-console fake-e2e
 ```
+
+`make check` runs the backend, frontend, and fake protocol gates. `make browser-check`
+builds the production frontend and runs the real Chromium acceptance suite against
+the loopback fake stack.
 
 ## Security defaults
 

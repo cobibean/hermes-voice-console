@@ -13,9 +13,15 @@ export function TranscriptPanel({
       <div className="message-list">
         {messages.length === 0 && !response ? <p className="empty-history">No messages yet.</p> : null}
         {messages.map((message, index) => (
-          <article className={`message ${message.role}`} key={`${index}-${message.content.slice(0, 24)}`}>
-            <strong>{message.role === 'user' ? 'You' : 'JobHunter'}</strong>
+          <article className={`message ${message.role}`} key={message.id ?? `${index}-${message.content.slice(0, 24)}`}>
+            <strong>{message.role === 'user' ? 'You' : message.role === 'tool' ? `Tool · ${message.tool ?? 'Hermes'}` : 'JobHunter'}</strong>
             <p>{message.content}</p>
+            {message.role === 'tool' ? (
+              <small className={`tool-status ${message.status ?? 'completed'}`} role="status" aria-live="polite">
+                {message.status ?? 'completed'}
+                {typeof message.duration === 'number' ? ` · ${message.duration.toFixed(2)}s` : ''}
+              </small>
+            ) : null}
           </article>
         ))}
         {response ? (

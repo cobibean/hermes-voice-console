@@ -42,6 +42,7 @@ describe('console architecture seams', () => {
     messages: [
       { role: 'user', content: 'User message' },
       { role: 'assistant', content: 'Agent response' },
+      { role: 'tool', content: 'Checked status', tool: 'terminal', status: 'completed', duration: 0.2 },
     ],
     newConversation: vi.fn(),
     response: 'Agent response',

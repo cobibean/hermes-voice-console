@@ -1,10 +1,13 @@
-.PHONY: check build-image smoke-stack smoke-stack-down
+.PHONY: check browser-check build-image smoke-stack smoke-stack-down
 
 check:
 	.venv/bin/ruff check backend tests/backend
 	.venv/bin/python -m pytest tests/backend -q
 	cd frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm build
 	.venv/bin/voice-console fake-e2e
+
+browser-check:
+	cd frontend && pnpm build && pnpm test:e2e
 
 build-image:
 	docker build -t hermes-voice-console:local .

@@ -59,6 +59,7 @@ export function MobileConsole({
       <VoiceControls
         recording={controller.state.recording}
         supported={controller.isCaptureSupported}
+        ready={Boolean(controller.selectedTarget && controller.sessionKey)}
         speakReplies={controller.speakReplies}
         onSpeakReplies={controller.setSpeakReplies}
         onStart={controller.startRecording}

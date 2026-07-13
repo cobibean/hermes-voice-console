@@ -81,6 +81,28 @@ class BurstTransport(ControlledTransport):
         yield {"type": "agent.completed", "run_id": run_id, "text": "done"}
 
 
+class ApprovalRaceTransport(ControlledTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.approval_started = asyncio.Event()
+        self.approval_release = asyncio.Event()
+
+    async def events(self, run_id: str) -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "type": "agent.approval.request",
+            "run_id": run_id,
+            "approval": {"message": "Approve?", "choices": ["once", "deny"]},
+        }
+        await self.approval_started.wait()
+        yield {"type": "agent.completed", "run_id": run_id, "text": "finished"}
+
+    async def approve(self, run_id: str, decision: str) -> dict[str, Any]:
+        self.approvals.append((run_id, decision))
+        self.approval_started.set()
+        await self.approval_release.wait()
+        return {"run_id": run_id, "choice": decision}
+
+
 def coordinator_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     gate = AuthGate(
         AuthConfig(mode=AuthMode.DEVELOPMENT),
@@ -163,6 +185,33 @@ async def test_disconnect_reconnect_keeps_one_backend_owned_post(tmp_path, monke
     assert store.require_run(run_id=run.run_id).status == "completed"
     assert "unique-private-prompt" not in store.path.read_bytes().decode(errors="ignore")
     assert "private-content" not in store.path.read_bytes().decode(errors="ignore")
+
+
+@pytest.mark.asyncio
+async def test_late_approval_response_cannot_reopen_completed_run(tmp_path, monkeypatch) -> None:
+    coordinator, store, target, session, _history = coordinator_fixture(tmp_path, monkeypatch)
+    transport = ApprovalRaceTransport()
+    monkeypatch.setattr(coordinator, "_transport", lambda _target: transport)
+
+    run, queue = await coordinator.start(
+        target=target,
+        session=session,
+        turn_id="turn-approval-race",
+        text="approval race",
+    )
+    assert (await queue.get())["type"] == "agent.run.started"
+    assert (await queue.get())["type"] == "agent.approval.request"
+
+    approval_task = asyncio.create_task(
+        coordinator.approve(run.run_id or "", "once", owner_key="owner")
+    )
+    assert (await queue.get())["type"] == "agent.completed"
+    assert await queue.get() is None
+    transport.approval_release.set()
+    await approval_task
+
+    assert store.require_run(run_id=run.run_id).status == "completed"
+    assert store.active_run_for_conversation(session.conversation_id, owner_key="owner") is None
 
 
 @pytest.mark.asyncio

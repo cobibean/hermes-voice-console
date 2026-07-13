@@ -2,6 +2,8 @@ import type { ConsoleController } from '../useConsoleController';
 
 export function Composer({ controller, compact = false }: { controller: ConsoleController; compact?: boolean }) {
   const locked = Boolean(controller.acceptanceUnknown)
+    || !controller.selectedTarget
+    || !controller.sessionKey
     || controller.state.agent === 'running'
     || controller.state.agent === 'waiting_for_approval';
   return (

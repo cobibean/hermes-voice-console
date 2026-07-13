@@ -119,6 +119,7 @@ export function useConsoleController({
   const [speechFallbackAvailable, setSpeechFallbackAvailable] = useState(false);
   const clientRef = useRef<VoiceClient | null>(null);
   const clientSignatureRef = useRef('');
+  const connectPromiseRef = useRef<{ signature: string; promise: Promise<VoiceClient> } | null>(null);
   const captureRef = useRef<CaptureSession | null>(null);
   const playbackRef = useRef(new PlaybackQueue(
     undefined,
@@ -131,11 +132,13 @@ export function useConsoleController({
   const activeTurnIdRef = useRef<string | null>(null);
   const lastSequenceRef = useRef(0);
   const pendingTextTurnRef = useRef<{ turnId: string; text: string } | null>(null);
+  const feedSequenceRef = useRef(0);
 
   const closeClient = useCallback(() => {
     clientRef.current?.close();
     clientRef.current = null;
     clientSignatureRef.current = '';
+    connectPromiseRef.current = null;
     setConnected(false);
   }, []);
 
@@ -253,6 +256,55 @@ export function useConsoleController({
       }
     }
     if (event.type === 'agent.delta') setResponse((previous) => previous + event.delta);
+    if (event.type === 'agent.tool.started') {
+      feedSequenceRef.current += 1;
+      const id = `tool-${event.run_id}-${feedSequenceRef.current}`;
+      setMessages((current) => [...current, {
+        role: 'tool',
+        id,
+        runId: event.run_id,
+        tool: event.tool ?? 'Hermes tool',
+        content: event.preview || 'Tool call started',
+        status: 'running',
+      }]);
+    }
+    if (event.type === 'agent.tool.completed') {
+      setMessages((current) => {
+        const next = [...current];
+        let index = -1;
+        for (let cursor = next.length - 1; cursor >= 0; cursor -= 1) {
+          const message = next[cursor];
+          if (
+            message.role === 'tool'
+            && message.runId === event.run_id
+            && message.status === 'running'
+            && (!event.tool || message.tool === event.tool)
+          ) {
+            index = cursor;
+            break;
+          }
+        }
+        if (index >= 0) {
+          next[index] = {
+            ...next[index],
+            status: event.error ? 'failed' : 'completed',
+            duration: event.duration,
+          };
+        } else {
+          feedSequenceRef.current += 1;
+          next.push({
+            role: 'tool',
+            id: `tool-${event.run_id}-${feedSequenceRef.current}`,
+            runId: event.run_id,
+            tool: event.tool ?? 'Hermes tool',
+            content: 'Tool call completed',
+            status: event.error ? 'failed' : 'completed',
+            duration: event.duration,
+          });
+        }
+        return next;
+      });
+    }
     if (event.type === 'agent.completed') {
       setMessages((current) => [...current, { role: 'assistant', content: event.text }]);
       setResponse('');
@@ -296,6 +348,7 @@ export function useConsoleController({
     }
     if (event.type === 'agent.failed' || event.type === 'agent.stopped' || event.type === 'agent.completed') {
       activeRunIdRef.current = null;
+      setApproval(null);
       clearRecovery();
     }
     if (event.type === 'tts.start') playbackRef.current.start(event.turn_id, event.chunk_index, event.mime);
@@ -307,6 +360,7 @@ export function useConsoleController({
   const connect = useCallback(async () => {
     if (!selectedTarget || !sessionKey) throw new Error('Select a target and session first');
     const signature = `${selectedTarget}|${sessionKey}|${speakReplies}`;
+    if (connectPromiseRef.current?.signature === signature) return connectPromiseRef.current.promise;
     if (clientRef.current?.isOpen && clientSignatureRef.current === signature) return clientRef.current;
     closeClient();
     const client = new VoiceClient({
@@ -319,17 +373,37 @@ export function useConsoleController({
     });
     const recovery = loadRecovery();
     const canResume = recovery?.target === selectedTarget && recovery.conversationId === sessionKey;
-    await client.connect({
+    clientRef.current = client;
+    clientSignatureRef.current = signature;
+    const promise = client.connect({
       target: selectedTarget,
       conversationId: sessionKey,
       speakReplies,
       resumeRunId: canResume ? recovery.runId : undefined,
       lastSequence: canResume ? recovery.lastSequence : undefined,
+    }).then(() => client).catch((error: unknown) => {
+      if (clientRef.current === client) {
+        clientRef.current = null;
+        clientSignatureRef.current = '';
+      }
+      throw error;
     });
-    clientRef.current = client;
-    clientSignatureRef.current = signature;
-    return client;
+    connectPromiseRef.current = { signature, promise };
+    try {
+      return await promise;
+    } finally {
+      if (connectPromiseRef.current?.promise === promise) connectPromiseRef.current = null;
+    }
   }, [authMode, closeClient, getToken, handleEvent, selectedTarget, sessionKey, speakReplies]);
+
+  useEffect(() => {
+    if (!selectedTarget || !sessionKey) return;
+    void connect().catch((error: unknown) => {
+      voiceDiagnostic('socket.autoconnect.failed', {
+        error: error instanceof Error ? error.message : 'unknown connection error',
+      });
+    });
+  }, [connect, selectedTarget, sessionKey]);
 
   const startRecording = useCallback(async () => {
     const turnId = nextTurnId();

@@ -38,8 +38,13 @@ export interface SessionInfo {
 }
 
 export interface ConversationMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
+  id?: string;
+  tool?: string;
+  status?: 'running' | 'completed' | 'failed';
+  duration?: number;
+  runId?: string;
 }
 
 export type VoiceServerEvent =

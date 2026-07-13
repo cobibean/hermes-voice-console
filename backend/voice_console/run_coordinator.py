@@ -284,6 +284,12 @@ class RunCoordinator:
             "agent.approval.responded": "running",
             "agent.approval.resolved": "running",
         }.get(str(terminal_type))
+        if active.record.status in TERMINAL_STATUSES and terminal_type not in {
+            "agent.completed",
+            "agent.failed",
+            "agent.stopped",
+        }:
+            status = None
         active.record = self.store.update_run(
             active.record.local_turn_id,
             status=status,
@@ -391,6 +397,8 @@ class RunCoordinator:
             ):
                 raise RuntimeError("Hermes did not authorize a persistent approval")
         result = await active.transport.approve(run_id, decision)
+        if active.record.status in TERMINAL_STATUSES:
+            return result
         await self._emit(
             active,
             {"type": "agent.approval.resolved", "run_id": run_id, "result": result},

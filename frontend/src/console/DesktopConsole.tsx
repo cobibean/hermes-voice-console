@@ -8,6 +8,7 @@ import { RunInspector } from './RunInspector';
 import { Composer } from './shared/Composer';
 import { ConsoleHeader } from './shared/ConsoleHeader';
 import type { ConsoleController } from './useConsoleController';
+import { useCompactDesktop } from './useConsoleLayout';
 
 export function DesktopConsole({
   controller,
@@ -18,6 +19,7 @@ export function DesktopConsole({
   accountControl?: ReactNode;
   notice?: ReactNode;
 }) {
+  const compact = useCompactDesktop();
   const bootstrap = controller.bootstrap;
   if (!bootstrap) return null;
   const selected = bootstrap.targets.find((target) => target.name === controller.selectedTarget);
@@ -66,6 +68,7 @@ export function DesktopConsole({
           <VoiceControls
             recording={controller.state.recording}
             supported={controller.isCaptureSupported}
+            ready={Boolean(controller.selectedTarget && controller.sessionKey)}
             speakReplies={controller.speakReplies}
             onSpeakReplies={controller.setSpeakReplies}
             onStart={controller.startRecording}
@@ -79,17 +82,28 @@ export function DesktopConsole({
           />
         </section>
 
-        <aside className="desktop-inspector">
-          <div className="card inspector-heading">
-            <p className="eyebrow">Live run</p>
-            <h2>{controller.viewState.replaceAll('_', ' ')}</h2>
-            <div className="button-row">
+        {compact ? (
+          <details className="compact-inspector card">
+            <summary>Run activity and diagnostics · {controller.viewState.replaceAll('_', ' ')}</summary>
+            <div className="button-row compact-inspector-actions">
               <button onClick={() => void controller.connect()}>Connect</button>
               <button onClick={controller.stopRun} disabled={!controller.state.activeRunId}>Stop run</button>
             </div>
-          </div>
-          <RunInspector controller={controller} />
-        </aside>
+            <RunInspector controller={controller} />
+          </details>
+        ) : (
+          <aside className="desktop-inspector">
+            <div className="card inspector-heading">
+              <p className="eyebrow">Live run</p>
+              <h2>{controller.viewState.replaceAll('_', ' ')}</h2>
+              <div className="button-row">
+                <button onClick={() => void controller.connect()}>Connect</button>
+                <button onClick={controller.stopRun} disabled={!controller.state.activeRunId}>Stop run</button>
+              </div>
+            </div>
+            <RunInspector controller={controller} />
+          </aside>
+        )}
       </div>
       <ApprovalModal approval={controller.approval} onResolve={controller.resolveApproval} />
     </main>

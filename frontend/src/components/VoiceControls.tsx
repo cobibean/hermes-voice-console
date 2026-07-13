@@ -3,6 +3,7 @@ import type { RecordingState } from '../lib/state';
 export function VoiceControls({
   recording,
   supported,
+  ready,
   speakReplies,
   onSpeakReplies,
   onStart,
@@ -16,6 +17,7 @@ export function VoiceControls({
 }: {
   recording: RecordingState;
   supported: boolean;
+  ready: boolean;
   speakReplies: boolean;
   onSpeakReplies: (value: boolean) => void;
   onStart: () => void;
@@ -33,7 +35,7 @@ export function VoiceControls({
     <section className="card controls" aria-label="Voice controls">
       <button
         className={isRecording ? 'mic recording' : 'mic'}
-        disabled={!supported || busy}
+        disabled={!supported || !ready || busy}
         onClick={isRecording ? onStop : onStart}
       >
         {isRecording ? 'Send recording' : busy ? 'Working…' : 'Start recording'}

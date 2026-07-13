@@ -54,9 +54,10 @@ export function consoleReducer(state: ConsoleMachineState, action: ConsoleAction
       if (event.type === 'agent.run.started') return { ...state, agent: 'running', activeRunId: event.run_id };
       if (event.type === 'agent.approval.request') return { ...state, agent: 'waiting_for_approval', activeRunId: event.run_id };
       if (event.type === 'agent.approval.responded' || event.type === 'agent.approval.resolved') return { ...state, agent: 'running', activeRunId: event.run_id };
-      if (event.type === 'agent.completed') return { ...state, agent: 'completed', activeRunId: event.run_id };
-      if (event.type === 'agent.failed') return { ...state, agent: 'failed', error: event.error };
-      if (event.type === 'agent.stopped' || event.type === 'agent.stop.requested') return { ...state, agent: 'stopped', activeRunId: event.run_id };
+      if (event.type === 'agent.completed') return { ...state, agent: 'completed', activeRunId: undefined };
+      if (event.type === 'agent.failed') return { ...state, agent: 'failed', activeRunId: undefined, error: event.error };
+      if (event.type === 'agent.stopped') return { ...state, agent: 'stopped', activeRunId: undefined };
+      if (event.type === 'agent.stop.requested') return { ...state, agent: 'stopped', activeRunId: event.run_id };
       if (event.type === 'tts.start') return { ...state, playback: 'synthesizing' };
       if (event.type === 'tts.complete') return { ...state, playback: 'idle' };
       if (event.type === 'error') return { ...state, error: event.message, recording: event.recoverable ? (state.recording === 'transcribing' ? 'idle' : state.recording) : 'error' };
