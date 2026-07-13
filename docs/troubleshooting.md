@@ -8,9 +8,11 @@
 
 ## WebSocket closes immediately
 
-- Check `VOICE_CONSOLE_SESSION_SECRET` and the token entered in the UI.
-- Check server logs for `4401` auth failures.
-- If auth is disabled for local development, verify `server.auth_required: false` in the active config.
+- A `4401` indicates missing, invalid, or expired Clerk/service authentication.
+- A `4403` indicates a valid but unauthorized Clerk user, disallowed Host/Origin, or insecure non-loopback WebSocket.
+- In Clerk mode, verify the exact issuer, authorized origin, allowed user list, and Clerk dashboard origin.
+- In service mode, verify the bearer/frame credential from `VOICE_CONSOLE_SERVICE_TOKEN`; never add it to a URL.
+- In development mode, verify both bind host and public URL are loopback and the browser Origin is explicitly allowed.
 
 ## Target capability missing
 

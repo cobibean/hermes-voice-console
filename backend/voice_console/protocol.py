@@ -37,7 +37,6 @@ def validate_turn_id(turn_id: Any, *, required: bool = True) -> str:
     return tid
 
 
-
 def validate_session_key(value: Any, *, field: str = "session_key") -> str:
     text = "" if value is None else str(value).strip()
     if not text:
@@ -46,6 +45,15 @@ def validate_session_key(value: Any, *, field: str = "session_key") -> str:
         raise VoiceProtocolError("bad_session", f"{field} exceeds 256 chars")
     if any(ch in text for ch in ("\r", "\n", "\x00")):
         raise VoiceProtocolError("bad_session", f"{field} contains control characters")
+    return text
+
+
+def validate_input_text(value: Any, *, max_chars: int) -> str:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        raise VoiceProtocolError("empty_input", "message text is required")
+    if len(text) > max_chars:
+        raise VoiceProtocolError("input_too_long", f"message exceeds {max_chars} characters")
     return text
 
 
@@ -83,7 +91,12 @@ def validate_hello(msg: dict[str, Any]) -> dict[str, Any]:
 
 
 def error_frame(exc: VoiceProtocolError) -> dict[str, Any]:
-    return {"type": "error", "code": exc.code, "message": exc.message, "recoverable": exc.recoverable}
+    return {
+        "type": "error",
+        "code": exc.code,
+        "message": exc.message,
+        "recoverable": exc.recoverable,
+    }
 
 
 def sanitize_provider_error(message: str) -> str:

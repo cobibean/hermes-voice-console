@@ -2,55 +2,62 @@
 
 ## Files
 
-- `config/voice.example.yaml` — non-secret server and voice-provider settings.
-- `config/targets.example.yaml` — target registry with env-var names for API keys.
-- `.env.example` — secret/env names only. Copy to `.env` locally; never commit populated `.env`.
-- `config/voice.fake.yaml` and `config/targets.fake.yaml` — deterministic fake provider/target configs for local smoke tests.
+- `config/voice.example.yaml` - non-secret server, auth-policy, and voice-provider settings.
+- `config/targets.example.yaml` - target registry with env-var names for API keys.
+- `.env.example` - secret/env names only. Copy to `.env` locally; never commit populated `.env`.
+- `config/voice.fake.yaml` and `config/targets.fake.yaml` - deterministic loopback development configs.
 
-## Console auth
+## Authentication modes
 
-`server.auth_required` defaults to `true`. When enabled, set:
+`auth.mode` is explicit and must be one of:
+
+- `clerk` - interactive human access. Configure an exact HTTPS issuer, publishable key, exact allowed origins, and optional allowed user IDs. The publishable key is the only Clerk value returned by `/api/public-config`.
+- `service` - programmatic-only access. Set the env var named by `auth.service_token_env`, normally `VOICE_CONSOLE_SERVICE_TOKEN`. The browser shows an informational screen and never asks for this token.
+- `development` - credential-free local interaction. Startup fails unless both the bind host and `public_base_url` are loopback. Never place this mode behind Tailscale or another proxy.
+
+Every mode requires a separate ownership secret:
 
 ```bash
-VOICE_CONSOLE_SESSION_SECRET=$(openssl rand -hex 32)
+VOICE_CONSOLE_SCOPE_SECRET=$(openssl rand -hex 32)
 ```
 
-The frontend asks for this token and sends it to the standalone console only. It is not a Hermes target API key.
+The backend uses this secret to derive stable pseudonymous owner and memory-scope keys. Rotating it intentionally changes those keys and makes previously owned console sessions/runs inaccessible through their old ownership mapping. Do not reuse a Clerk secret, service token, Hermes key, or speech-provider key.
 
-## Target keys
+Service mode additionally requires:
 
-Each target references an env var name:
+```bash
+VOICE_CONSOLE_SERVICE_TOKEN=$(openssl rand -hex 32)
+```
+
+HTTP clients use `Authorization: Bearer`. WebSocket clients connect with no credentials in the URL and send an `auth` frame first. Browser code never stores JWTs or service tokens in `localStorage` or `sessionStorage`.
+
+## Exposure policy
+
+- `server.public_base_url` must be HTTPS outside loopback.
+- `server.allowed_hosts` and `auth.allowed_origins` are exact allowlists; wildcards are not supported.
+- Clerk and development browser WebSockets require an allowed `Origin`.
+- A service client may omit `Origin`; if it supplies one, that origin must be allowed.
+- Non-loopback WebSockets must arrive as WSS after trusted proxy headers are applied.
+- `auth.allow_persistent_approvals` defaults false and can only narrow Hermes' event-level permission.
+
+## Target keys and labels
+
+Each target references an env var name. Its private `base_url` remains server-only:
 
 ```yaml
 targets:
-  knwldg:
+  jobhunter:
     base_url: "http://127.0.0.1:8642"
-    api_key_env: "KNWLDG_API_SERVER_KEY"
+    api_key_env: "JOBHUNTER_API_SERVER_KEY"
+    configured_provider_label: "Codex OAuth"
+    configured_model_label: "Operator configured model"
 ```
 
-Set the value in `.env` or the service environment:
-
-```bash
-KNWLDG_API_SERVER_KEY=...
-```
-
-The backend sends the key as `Authorization: Bearer <target-key>` to the Hermes API Server. The key is never included in `/api/bootstrap`, `/api/targets`, WebSocket ready frames, or frontend state.
+Provider/model labels are optional operator-configured descriptions, not proof of the model that executed a particular run. Target keys and target base URLs are never included in browser DTOs.
 
 ## Voice providers
 
-STT providers:
-
-- `fake` — deterministic tests and local fake E2E.
-- `openai` — uses `OPENAI_API_KEY` or `VOICE_TOOLS_OPENAI_KEY` with `/v1/audio/transcriptions`.
-- `groq` — uses `GROQ_API_KEY` with Groq's OpenAI-compatible transcription endpoint.
-- `faster_whisper` — optional local dependency; install separately if needed.
-
-TTS providers:
-
-- `fake` — deterministic valid WAV output.
-- `edge` — uses optional `edge-tts`; no API key, network provider.
-- `openai` — uses `OPENAI_API_KEY` or `VOICE_TOOLS_OPENAI_KEY` with `/v1/audio/speech`.
-- `elevenlabs` — uses `ELEVENLABS_API_KEY` and `elevenlabs_voice_id`.
+STT providers are `fake`, `openai`, `groq`, and optional local `faster_whisper`. TTS providers are `fake`, `edge`, `openai`, and `elevenlabs`. Provider credentials stay in the console service environment.
 
 ## Safety bounds
 
@@ -59,4 +66,6 @@ TTS providers:
 - `max_buffer_mb` is the absolute recording buffer cap.
 - `max_tts_text_chars` limits TTS prompt length.
 - `max_tts_audio_mb` rejects oversized provider output.
+- `server.max_ws_text_chars` limits authenticated text frames.
+- `auth.preauth_max_chars` and `auth.auth_timeout_seconds` bound pre-authentication work.
 - `retain_audio_debug` defaults false; leave it off except for targeted debugging.

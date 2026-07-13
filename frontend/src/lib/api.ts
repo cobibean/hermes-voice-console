@@ -1,27 +1,53 @@
-import type { Bootstrap } from './types';
+import type { Bootstrap, PublicConfig, SessionInfo } from './types';
 
-const TOKEN_KEY = 'hvc.consoleToken';
+export type AuthTokenProvider = (skipCache?: boolean) => Promise<string | null>;
 
-export function getStoredToken(): string {
-  return window.sessionStorage.getItem(TOKEN_KEY) ?? '';
+export async function loadPublicConfig(): Promise<PublicConfig> {
+  const response = await fetch('/api/public-config');
+  if (!response.ok) throw new Error(`Unable to load console configuration (${response.status})`);
+  return (await response.json()) as PublicConfig;
 }
 
-export function setStoredToken(token: string): void {
-  if (token) window.sessionStorage.setItem(TOKEN_KEY, token);
-  else window.sessionStorage.removeItem(TOKEN_KEY);
-}
-
-export async function apiFetch<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(
+  path: string,
+  getToken: AuthTokenProvider,
+  init: RequestInit = {},
+): Promise<T> {
   const headers = new Headers(init.headers);
+  const token = await getToken(false);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const res = await fetch(path, { ...init, headers });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 200)}` : ''}`);
+  const response = await fetch(path, { ...init, headers });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(
+      `${response.status} ${response.statusText}${body ? `: ${body.slice(0, 200)}` : ''}`,
+    );
   }
-  return (await res.json()) as T;
+  return (await response.json()) as T;
 }
 
-export async function loadBootstrap(token: string): Promise<Bootstrap> {
-  return apiFetch<Bootstrap>('/api/bootstrap', token);
+export async function loadBootstrap(getToken: AuthTokenProvider): Promise<Bootstrap> {
+  return apiFetch<Bootstrap>('/api/bootstrap', getToken);
+}
+
+export async function listSessions(
+  target: string,
+  getToken: AuthTokenProvider,
+): Promise<SessionInfo[]> {
+  const result = await apiFetch<{ sessions: SessionInfo[] }>(
+    `/api/sessions?target=${encodeURIComponent(target)}`,
+    getToken,
+  );
+  return result.sessions;
+}
+
+export async function createSession(
+  target: string,
+  getToken: AuthTokenProvider,
+): Promise<SessionInfo> {
+  return apiFetch<SessionInfo>('/api/sessions', getToken, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target }),
+  });
 }

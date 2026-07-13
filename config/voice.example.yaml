@@ -2,7 +2,16 @@ server:
   host: "127.0.0.1"
   port: 8787
   public_base_url: "http://localhost:8787"
-  auth_required: true
+  allowed_hosts: ["localhost", "127.0.0.1"]
+  state_dir: "~/.local/state/hermes-voice-console"
+
+auth:
+  # development is loopback-only. Use clerk for human deployments or service for automation.
+  mode: "development"
+  allowed_origins: ["http://localhost:8787", "http://127.0.0.1:8787"]
+  service_token_env: "VOICE_CONSOLE_SERVICE_TOKEN"
+  scope_secret_env: "VOICE_CONSOLE_SCOPE_SECRET"
+  allow_persistent_approvals: false
 
 voice:
   stt_provider: "openai"        # openai | groq | faster_whisper | fake
@@ -12,6 +21,7 @@ voice:
   max_recording_wall_seconds: 180
   max_buffer_mb: 25
   max_tts_text_chars: 8000
+  max_input_text_chars: 16000
   max_tts_audio_mb: 50
   speak_replies_default: false
   retain_audio_debug: false

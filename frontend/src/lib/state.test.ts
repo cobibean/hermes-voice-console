@@ -14,7 +14,7 @@ describe('consoleReducer', () => {
   });
 
   it('tracks approval and completion states', () => {
-    let state = consoleReducer(initialConsoleState, { type: 'event', event: { type: 'agent.run.started', run_id: 'r1', session_id: 's1' } });
+    let state = consoleReducer(initialConsoleState, { type: 'event', event: { type: 'agent.run.started', run_id: 'r1', session_id: 's1', turn_id: 't1' } });
     expect(state.agent).toBe('running');
     state = consoleReducer(state, { type: 'event', event: { type: 'agent.approval.request', run_id: 'r1', approval: { message: 'Approve?' } } });
     expect(state.agent).toBe('waiting_for_approval');

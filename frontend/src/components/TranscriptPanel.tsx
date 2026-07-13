@@ -3,7 +3,7 @@ export function TranscriptPanel({ transcript, response }: { transcript: string; 
     <section className="card">
       <h2>Transcript</h2>
       <p className="transcript">{transcript || 'No transcript yet.'}</p>
-      <h2>Assistant response</h2>
+      <h2>Agent response</h2>
       <p className="response">{response || 'No response yet.'}</p>
     </section>
   );

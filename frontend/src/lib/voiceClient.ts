@@ -1,7 +1,9 @@
-import type { VoiceServerEvent } from './types';
+import type { AuthTokenProvider } from './api';
+import type { AuthMode, VoiceServerEvent } from './types';
 
 export interface VoiceClientOptions {
-  token: string;
+  authMode: AuthMode;
+  getToken: AuthTokenProvider;
   onEvent: (event: VoiceServerEvent) => void;
   onAudio: (chunk: ArrayBuffer) => void;
   onClose?: () => void;
@@ -10,8 +12,10 @@ export interface VoiceClientOptions {
 
 export interface HelloOptions {
   target: string;
-  sessionId: string;
+  conversationId: string;
   speakReplies: boolean;
+  resumeRunId?: string;
+  lastSequence?: number;
 }
 
 type EventPredicate = (event: VoiceServerEvent) => boolean;
@@ -39,8 +43,7 @@ export class VoiceClient {
   async connect(hello: HelloOptions): Promise<void> {
     if (this.isOpen) return;
     const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const params = new URLSearchParams({ token: this.options.token, target: hello.target, session_id: hello.sessionId });
-    const url = `${scheme}//${window.location.host}/ws/voice?${params.toString()}`;
+    const url = `${scheme}//${window.location.host}/ws/voice`;
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
@@ -58,23 +61,39 @@ export class VoiceClient {
           resolve();
         }
       };
-      ws.addEventListener('open', () => {
+      const sendHello = () => {
         ws.send(JSON.stringify({
           type: 'hello',
           version: 1,
           target: hello.target,
-          session_id: hello.sessionId,
+          conversation_id: hello.conversationId,
           mode: 'push_to_talk',
           input_format: 'pcm16',
           input_sample_rate: 16000,
           speak_replies: hello.speakReplies,
+          resume_run_id: hello.resumeRunId,
+          last_sequence: hello.lastSequence,
         }));
+      };
+      ws.addEventListener('open', () => {
+        void this.options.getToken(false)
+          .then((token) => ws.send(JSON.stringify({ type: 'auth', token })))
+          .catch((error: unknown) => settleReject(error as Error));
       }, { once: true });
       ws.addEventListener('error', () => settleReject(new Error('voice websocket connection failed')), { once: true });
       ws.addEventListener('message', (ev) => {
         if (typeof ev.data === 'string') {
           try {
             const event = JSON.parse(ev.data) as VoiceServerEvent;
+            if (event.type === 'auth.ok') {
+              sendHello();
+              return;
+            }
+            if (event.type === 'auth.expiring' && this.options.authMode === 'clerk') {
+              void this.options.getToken(true)
+                .then((token) => ws.send(JSON.stringify({ type: 'auth.refresh', token })))
+                .catch((error: unknown) => this.options.onError?.((error as Error).message));
+            }
             this.options.onEvent(event);
             this.resolveWaiters(event);
             if (event.type === 'ready') settleResolve();
@@ -152,6 +171,10 @@ export class VoiceClient {
     this.sendJson({ type: 'recording.stop', turn_id: turnId });
   }
 
+  sendText(turnId: string, text: string): void {
+    this.sendJson({ type: 'text.submit', turn_id: turnId, text });
+  }
+
   resolveApproval(runId: string, decision: 'once' | 'session' | 'always' | 'deny'): void {
     this.sendJson({ type: 'approval.resolve', run_id: runId, decision });
   }
@@ -162,6 +185,17 @@ export class VoiceClient {
 
   cancelTts(turnId: string): void {
     this.sendJson({ type: 'tts.cancel', turn_id: turnId });
+  }
+
+  acknowledgeAcceptanceUnknown(localTurnId: string): void {
+    this.sendJson({
+      type: 'run.acceptance_unknown.acknowledge',
+      local_turn_id: localTurnId,
+    });
+  }
+
+  acknowledgeUnrecoverable(runId: string): void {
+    this.sendJson({ type: 'run.unrecoverable.acknowledge', run_id: runId });
   }
 
   close(): void {

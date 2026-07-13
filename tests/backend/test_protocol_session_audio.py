@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
-
 from voice_console.audio import OwnedAudioStore
 from voice_console.config import VoiceConfig
-from voice_console.protocol import VoiceProtocolError, validate_hello, validate_turn_id
+from voice_console.protocol import (
+    VoiceProtocolError,
+    validate_hello,
+    validate_input_text,
+    validate_turn_id,
+)
 from voice_console.providers import FakeSttProvider, FakeTtsProvider
 from voice_console.voice_session import RecordingSession
 
@@ -23,13 +26,29 @@ def test_turn_id_validation_requires_safe_charset():
 
 
 def test_hello_validation():
-    validate_hello({"type": "hello", "version": 1, "mode": "push_to_talk", "input_format": "pcm16", "input_sample_rate": 16000})
+    validate_hello(
+        {
+            "type": "hello",
+            "version": 1,
+            "mode": "push_to_talk",
+            "input_format": "pcm16",
+            "input_sample_rate": 16000,
+        }
+    )
     with pytest.raises(VoiceProtocolError) as exc:
         validate_hello({"type": "hello", "version": 999})
     assert exc.value.code == "unsupported_version"
     with pytest.raises(VoiceProtocolError) as exc2:
         validate_hello({"type": "hello", "input_sample_rate": 44100})
     assert exc2.value.code == "unsupported_sample_rate"
+
+
+def test_shared_input_validator_trims_and_bounds_text():
+    assert validate_input_text("  hello  ", max_chars=10) == "hello"
+    with pytest.raises(VoiceProtocolError, match="required"):
+        validate_input_text("   ", max_chars=10)
+    with pytest.raises(VoiceProtocolError, match="exceeds"):
+        validate_input_text("too long", max_chars=3)
 
 
 def test_recording_stop_requires_matching_turn_and_clears_buffer():
@@ -50,7 +69,9 @@ def test_recording_stop_requires_matching_turn_and_clears_buffer():
 
 
 def test_recording_size_and_wall_caps():
-    session = RecordingSession(VoiceConfig(max_recording_seconds=1, max_buffer_mb=1, max_recording_wall_seconds=1))
+    session = RecordingSession(
+        VoiceConfig(max_recording_seconds=1, max_buffer_mb=1, max_recording_wall_seconds=1)
+    )
     session.start_recording("big")
     with pytest.raises(VoiceProtocolError) as exc:
         session.add_audio(b"\x00" * 40000)
@@ -94,7 +115,6 @@ async def test_fake_providers_roundtrip(tmp_path):
     path = store.validate_for_stream(audio.path, max_bytes=cfg.max_tts_audio_bytes)
     assert path.exists()
     assert audio.mime == "audio/wav"
-
 
 
 def test_expire_if_active_resets_silent_recording():

@@ -1,34 +1,16 @@
-.PHONY: install-backend install-frontend test-backend test-frontend lint-frontend typecheck-frontend build-frontend fake-e2e test-all serve fake-target
+.PHONY: check build-image smoke-stack smoke-stack-down
 
-install-backend:
-	python -m venv .venv
-	. .venv/bin/activate && pip install -e '.[dev]'
+check:
+	.venv/bin/ruff check backend tests/backend
+	.venv/bin/python -m pytest tests/backend -q
+	cd frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm build
+	.venv/bin/voice-console fake-e2e
 
-install-frontend:
-	cd frontend && pnpm install
+build-image:
+	docker build -t hermes-voice-console:local .
 
-test-backend:
-	. .venv/bin/activate && pytest tests/backend -q
+smoke-stack:
+	docker compose -f deploy/compose.example.yaml up --build --wait
 
-lint-frontend:
-	cd frontend && pnpm lint
-
-typecheck-frontend:
-	cd frontend && pnpm typecheck
-
-test-frontend:
-	cd frontend && pnpm test
-
-build-frontend:
-	cd frontend && pnpm build
-
-fake-e2e:
-	. .venv/bin/activate && voice-console fake-e2e
-
-test-all: test-backend lint-frontend typecheck-frontend test-frontend build-frontend fake-e2e
-
-serve:
-	. .venv/bin/activate && voice-console serve --config config/voice.yaml --targets config/targets.yaml
-
-fake-target:
-	. .venv/bin/activate && voice-console fake-target --port 9876
+smoke-stack-down:
+	docker compose -f deploy/compose.example.yaml down --volumes --remove-orphans

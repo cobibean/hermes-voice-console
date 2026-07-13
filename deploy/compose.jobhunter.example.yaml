@@ -1,0 +1,22 @@
+services:
+  console:
+    image: ghcr.io/example/hermes-voice-console:latest
+    network_mode: host
+    env_file:
+      - /opt/hermes-voice-console/.env
+    volumes:
+      - /opt/hermes-voice-console/voice.yaml:/config/voice.yaml:ro
+      - /opt/hermes-voice-console/targets.yaml:/config/targets.yaml:ro
+      - /opt/hermes-voice-console/state:/data
+    command:
+      - voice-console
+      - serve
+      - --config
+      - /config/voice.yaml
+      - --targets
+      - /config/targets.yaml
+      - --env
+      - /config/.env
+      - --static-dir
+      - auto
+    restart: unless-stopped

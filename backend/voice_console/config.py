@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -18,6 +20,12 @@ PLACEHOLDER_VALUES = {"", "replace_me", "replace_me_with_a_random_value", "chang
 
 class ConfigError(ValueError):
     """Raised when console configuration is invalid or unsafe."""
+
+
+class AuthMode(StrEnum):
+    CLERK = "clerk"
+    SERVICE = "service"
+    DEVELOPMENT = "development"
 
 
 def load_env_file(path: str | Path | None) -> None:
@@ -72,8 +80,29 @@ class ServerConfig:
     host: str = "127.0.0.1"
     port: int = 8787
     public_base_url: str = "http://localhost:8787"
-    auth_required: bool = True
     request_timeout_seconds: int = 120
+    allowed_hosts: tuple[str, ...] = ()
+    max_ws_text_chars: int = 65_536
+    state_dir: str = "~/.local/state/hermes-voice-console"
+    terminal_retention_seconds: int = 7_200
+    max_run_events: int = 250
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    mode: AuthMode = AuthMode.DEVELOPMENT
+    clerk_publishable_key: str | None = None
+    clerk_issuer: str | None = None
+    clerk_jwks_url: str | None = None
+    allowed_user_ids: tuple[str, ...] = ()
+    allowed_origins: tuple[str, ...] = ()
+    service_token_env: str = "VOICE_CONSOLE_SERVICE_TOKEN"
+    scope_secret_env: str = "VOICE_CONSOLE_SCOPE_SECRET"
+    auth_timeout_seconds: int = 5
+    preauth_max_chars: int = 8_192
+    clock_skew_seconds: int = 5
+    refresh_notice_seconds: int = 15
+    allow_persistent_approvals: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +114,7 @@ class VoiceConfig:
     max_recording_wall_seconds: int = 180
     max_buffer_mb: int = 25
     max_tts_text_chars: int = 8_000
+    max_input_text_chars: int = 16_000
     max_tts_audio_mb: int = 50
     speak_replies_default: bool = False
     retain_audio_debug: bool = False
@@ -117,6 +147,7 @@ class VoiceConfig:
 @dataclass(frozen=True)
 class ConsoleConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
 
 
@@ -133,6 +164,10 @@ class TargetConfig:
     api_key_env: str
     default_session_key: str
     preferred_transport: str = "runs"
+    configured_provider_label: str | None = None
+    configured_model_label: str | None = None
+    memory_scope_prefix: str = "voice-console"
+    fixed_memory_session_key: str | None = None
     voice: TargetVoiceConfig = field(default_factory=TargetVoiceConfig)
 
     @property
@@ -147,10 +182,10 @@ class TargetConfig:
         return {
             "name": self.name,
             "label": self.label,
-            "base_url": self.base_url,
-            "default_session_key": self.default_session_key,
             "preferred_transport": self.preferred_transport,
             "api_key_configured": self.api_key_present,
+            "configured_provider_label": self.configured_provider_label,
+            "configured_model_label": self.configured_model_label,
             "voice": {"tts_voice": self.voice.tts_voice},
         }
 
@@ -175,16 +210,76 @@ class TargetsConfig:
 def load_console_config(path: str | Path) -> ConsoleConfig:
     raw = _read_yaml(path)
     sraw = raw.get("server") or {}
+    araw = raw.get("auth") or {}
     vraw = raw.get("voice") or {}
-    if not isinstance(sraw, dict) or not isinstance(vraw, dict):
-        raise ConfigError("server and voice config sections must be mappings")
+    if not isinstance(sraw, dict) or not isinstance(araw, dict) or not isinstance(vraw, dict):
+        raise ConfigError("server, auth, and voice config sections must be mappings")
+    public_base_url = str(sraw.get("public_base_url", "http://localhost:8787")).rstrip("/")
+    parsed_public_url = urlparse(public_base_url)
+    if parsed_public_url.scheme not in {"http", "https"} or not parsed_public_url.hostname:
+        raise ConfigError("server.public_base_url must be an absolute http(s) URL")
+    raw_allowed_hosts = sraw.get("allowed_hosts") or []
+    if not isinstance(raw_allowed_hosts, list):
+        raise ConfigError("server.allowed_hosts must be a list")
+    allowed_hosts = tuple(
+        dict.fromkeys(
+            [
+                parsed_public_url.hostname,
+                *[str(value).strip().lower() for value in raw_allowed_hosts if str(value).strip()],
+            ]
+        )
+    )
     server = ServerConfig(
         host=str(sraw.get("host", "127.0.0.1")),
         port=_int(sraw.get("port"), 8787, minimum=1),
-        public_base_url=str(sraw.get("public_base_url", "http://localhost:8787")),
-        auth_required=_bool(sraw.get("auth_required"), True),
+        public_base_url=public_base_url,
         request_timeout_seconds=_int(sraw.get("request_timeout_seconds"), 120, minimum=5),
+        allowed_hosts=allowed_hosts,
+        max_ws_text_chars=_int(sraw.get("max_ws_text_chars"), 65_536, minimum=1_024),
+        state_dir=str(
+            os.environ.get("VOICE_CONSOLE_STATE_DIR")
+            or sraw.get("state_dir")
+            or "~/.local/state/hermes-voice-console"
+        ),
+        terminal_retention_seconds=_int(sraw.get("terminal_retention_seconds"), 7_200, minimum=60),
+        max_run_events=_int(sraw.get("max_run_events"), 250, minimum=10),
     )
+    legacy_auth_required = sraw.get("auth_required")
+    default_mode = "service" if _bool(legacy_auth_required, False) else "development"
+    try:
+        auth_mode = AuthMode(str(araw.get("mode", default_mode)).strip().lower())
+    except ValueError as exc:
+        raise ConfigError("auth.mode must be clerk, service, or development") from exc
+    raw_origins = araw.get("allowed_origins") or []
+    raw_user_ids = araw.get("allowed_user_ids") or []
+    if not isinstance(raw_origins, list) or not isinstance(raw_user_ids, list):
+        raise ConfigError("auth.allowed_origins and auth.allowed_user_ids must be lists")
+    auth = AuthConfig(
+        mode=auth_mode,
+        clerk_publishable_key=(
+            str(araw.get("clerk_publishable_key")).strip()
+            if araw.get("clerk_publishable_key")
+            else None
+        ),
+        clerk_issuer=(
+            str(araw.get("clerk_issuer")).strip().rstrip("/") if araw.get("clerk_issuer") else None
+        ),
+        clerk_jwks_url=(
+            str(araw.get("clerk_jwks_url")).strip() if araw.get("clerk_jwks_url") else None
+        ),
+        allowed_user_ids=tuple(str(value).strip() for value in raw_user_ids if str(value).strip()),
+        allowed_origins=tuple(
+            str(value).strip().rstrip("/") for value in raw_origins if str(value).strip()
+        ),
+        service_token_env=str(araw.get("service_token_env", "VOICE_CONSOLE_SERVICE_TOKEN")).strip(),
+        scope_secret_env=str(araw.get("scope_secret_env", "VOICE_CONSOLE_SCOPE_SECRET")).strip(),
+        auth_timeout_seconds=_int(araw.get("auth_timeout_seconds"), 5, minimum=1),
+        preauth_max_chars=_int(araw.get("preauth_max_chars"), 8_192, minimum=512),
+        clock_skew_seconds=_int(araw.get("clock_skew_seconds"), 5, minimum=0),
+        refresh_notice_seconds=_int(araw.get("refresh_notice_seconds"), 15, minimum=1),
+        allow_persistent_approvals=_bool(araw.get("allow_persistent_approvals"), False),
+    )
+    _validate_exposure(server, auth)
     voice = VoiceConfig(
         stt_provider=str(vraw.get("stt_provider", "fake")).strip().lower(),
         tts_provider=str(vraw.get("tts_provider", "fake")).strip().lower(),
@@ -193,6 +288,7 @@ def load_console_config(path: str | Path) -> ConsoleConfig:
         max_recording_wall_seconds=_int(vraw.get("max_recording_wall_seconds"), 180, minimum=1),
         max_buffer_mb=_int(vraw.get("max_buffer_mb"), 25, minimum=1),
         max_tts_text_chars=_int(vraw.get("max_tts_text_chars"), 8_000, minimum=1),
+        max_input_text_chars=_int(vraw.get("max_input_text_chars"), 16_000, minimum=1),
         max_tts_audio_mb=_int(vraw.get("max_tts_audio_mb"), 50, minimum=1),
         speak_replies_default=_bool(vraw.get("speak_replies_default"), False),
         retain_audio_debug=_bool(vraw.get("retain_audio_debug"), False),
@@ -207,7 +303,29 @@ def load_console_config(path: str | Path) -> ConsoleConfig:
     )
     if voice.sample_rate != 16_000:
         raise ConfigError("V1 voice protocol requires sample_rate: 16000")
-    return ConsoleConfig(server=server, voice=voice)
+    return ConsoleConfig(server=server, auth=auth, voice=voice)
+
+
+def _is_loopback(host: str | None) -> bool:
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _validate_exposure(server: ServerConfig, auth: AuthConfig) -> None:
+    public_url = urlparse(server.public_base_url)
+    if not _is_loopback(public_url.hostname) and public_url.scheme != "https":
+        raise ConfigError("non-loopback public_base_url must use HTTPS")
+    if auth.mode is AuthMode.DEVELOPMENT and (
+        not _is_loopback(server.host) or not _is_loopback(public_url.hostname)
+    ):
+        raise ConfigError("development auth requires loopback bind and public_base_url")
+    if auth.mode is AuthMode.CLERK:
+        if not auth.clerk_publishable_key or not auth.clerk_issuer:
+            raise ConfigError("Clerk mode requires clerk_publishable_key and clerk_issuer")
+        issuer = urlparse(auth.clerk_issuer)
+        if issuer.scheme != "https" or not issuer.hostname:
+            raise ConfigError("auth.clerk_issuer must be an exact HTTPS URL")
+        if not auth.allowed_origins:
+            raise ConfigError("Clerk mode requires a non-empty exact allowed_origins list")
 
 
 def load_targets_config(path: str | Path) -> TargetsConfig:
@@ -237,6 +355,22 @@ def load_targets_config(path: str | Path) -> TargetsConfig:
             api_key_env=api_key_env,
             default_session_key=default_session_key,
             preferred_transport=str(item.get("preferred_transport") or "runs"),
+            configured_provider_label=(
+                str(item.get("configured_provider_label")).strip()
+                if item.get("configured_provider_label")
+                else None
+            ),
+            configured_model_label=(
+                str(item.get("configured_model_label")).strip()
+                if item.get("configured_model_label")
+                else None
+            ),
+            memory_scope_prefix=str(item.get("memory_scope_prefix") or "voice-console"),
+            fixed_memory_session_key=(
+                str(item.get("fixed_memory_session_key")).strip()
+                if item.get("fixed_memory_session_key")
+                else None
+            ),
             voice=TargetVoiceConfig(tts_voice=str(voice_raw.get("tts_voice") or "default")),
         )
     return TargetsConfig(targets=targets)

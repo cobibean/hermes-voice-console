@@ -35,14 +35,18 @@ class SynthesizedAudio:
 class SttProvider:
     name = "base"
 
-    async def transcribe(self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore) -> Transcript:
+    async def transcribe(
+        self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> Transcript:
         raise NotImplementedError
 
 
 class FakeSttProvider(SttProvider):
     name = "fake"
 
-    async def transcribe(self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore) -> Transcript:
+    async def transcribe(
+        self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> Transcript:
         text = os.environ.get("VOICE_CONSOLE_FAKE_TRANSCRIPT") or config.fake_transcript
         return Transcript(text=text, provider=self.name)
 
@@ -50,10 +54,14 @@ class FakeSttProvider(SttProvider):
 class OpenAIWhisperProvider(SttProvider):
     name = "openai"
 
-    async def transcribe(self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore) -> Transcript:
+    async def transcribe(
+        self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> Transcript:
         key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VOICE_TOOLS_OPENAI_KEY")
         if not key:
-            raise ProviderUnavailable("OPENAI_API_KEY or VOICE_TOOLS_OPENAI_KEY is required for OpenAI STT")
+            raise ProviderUnavailable(
+                "OPENAI_API_KEY or VOICE_TOOLS_OPENAI_KEY is required for OpenAI STT"
+            )
         wav_path = store.write_wav(pcm16)
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -75,7 +83,9 @@ class OpenAIWhisperProvider(SttProvider):
 class GroqWhisperProvider(SttProvider):
     name = "groq"
 
-    async def transcribe(self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore) -> Transcript:
+    async def transcribe(
+        self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> Transcript:
         key = os.environ.get("GROQ_API_KEY")
         if not key:
             raise ProviderUnavailable("GROQ_API_KEY is required for Groq STT")
@@ -100,17 +110,21 @@ class GroqWhisperProvider(SttProvider):
 class FasterWhisperProvider(SttProvider):
     name = "faster_whisper"
 
-    async def transcribe(self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore) -> Transcript:
+    async def transcribe(
+        self, pcm16: bytes, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> Transcript:
         try:
             from faster_whisper import WhisperModel  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency
             raise ProviderUnavailable("Install faster-whisper to use local STT") from exc
         wav_path = store.write_wav(pcm16)
         try:
+
             def _run() -> str:
                 model = WhisperModel(os.environ.get("VOICE_CONSOLE_FASTER_WHISPER_MODEL", "base"))
                 segments, _info = model.transcribe(str(wav_path))
                 return " ".join(seg.text.strip() for seg in segments).strip()
+
             return Transcript(text=await asyncio.to_thread(_run), provider=self.name)
         finally:
             store.cleanup(wav_path, retain=config.retain_audio_debug)
@@ -119,14 +133,18 @@ class FasterWhisperProvider(SttProvider):
 class TtsProvider:
     name = "base"
 
-    async def synthesize(self, text: str, *, config: VoiceConfig, store: OwnedAudioStore) -> SynthesizedAudio:
+    async def synthesize(
+        self, text: str, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> SynthesizedAudio:
         raise NotImplementedError
 
 
 class FakeTtsProvider(TtsProvider):
     name = "fake"
 
-    async def synthesize(self, text: str, *, config: VoiceConfig, store: OwnedAudioStore) -> SynthesizedAudio:
+    async def synthesize(
+        self, text: str, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> SynthesizedAudio:
         path = store.reserve_path(".wav")
         # A tiny valid silent WAV. Browsers/tests can decode it; fake E2E only checks frames.
         with wave.open(str(path), "wb") as wav:
@@ -140,7 +158,9 @@ class FakeTtsProvider(TtsProvider):
 class EdgeTtsProvider(TtsProvider):
     name = "edge"
 
-    async def synthesize(self, text: str, *, config: VoiceConfig, store: OwnedAudioStore) -> SynthesizedAudio:
+    async def synthesize(
+        self, text: str, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> SynthesizedAudio:
         try:
             import edge_tts  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency
@@ -159,22 +179,34 @@ class EdgeTtsProvider(TtsProvider):
 class OpenAITtsProvider(TtsProvider):
     name = "openai"
 
-    async def synthesize(self, text: str, *, config: VoiceConfig, store: OwnedAudioStore) -> SynthesizedAudio:
+    async def synthesize(
+        self, text: str, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> SynthesizedAudio:
         key = os.environ.get("OPENAI_API_KEY") or os.environ.get("VOICE_TOOLS_OPENAI_KEY")
         if not key:
-            raise ProviderUnavailable("OPENAI_API_KEY or VOICE_TOOLS_OPENAI_KEY is required for OpenAI TTS")
+            raise ProviderUnavailable(
+                "OPENAI_API_KEY or VOICE_TOOLS_OPENAI_KEY is required for OpenAI TTS"
+            )
         path = store.reserve_path(".mp3")
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/audio/speech",
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    content=json.dumps({"model": config.openai_tts_model, "voice": config.openai_tts_voice, "input": text}),
+                    content=json.dumps(
+                        {
+                            "model": config.openai_tts_model,
+                            "voice": config.openai_tts_voice,
+                            "input": text,
+                        }
+                    ),
                 )
             if resp.status_code >= 400:
                 raise VoiceProtocolError("tts_failed", sanitize_provider_error(resp.text))
             if len(resp.content) > config.max_tts_audio_bytes:
-                raise VoiceProtocolError("tts_too_large", f"TTS audio exceeds {config.max_tts_audio_mb}MB cap")
+                raise VoiceProtocolError(
+                    "tts_too_large", f"TTS audio exceeds {config.max_tts_audio_mb}MB cap"
+                )
             path.write_bytes(resp.content)
             return SynthesizedAudio(path=path, mime=mime_for_path(path), provider=self.name)
         except BaseException:
@@ -185,23 +217,33 @@ class OpenAITtsProvider(TtsProvider):
 class ElevenLabsTtsProvider(TtsProvider):
     name = "elevenlabs"
 
-    async def synthesize(self, text: str, *, config: VoiceConfig, store: OwnedAudioStore) -> SynthesizedAudio:
+    async def synthesize(
+        self, text: str, *, config: VoiceConfig, store: OwnedAudioStore
+    ) -> SynthesizedAudio:
         key = os.environ.get("ELEVENLABS_API_KEY")
         voice_id = config.elevenlabs_voice_id or os.environ.get("ELEVENLABS_VOICE_ID")
         if not key or not voice_id:
-            raise ProviderUnavailable("ELEVENLABS_API_KEY and elevenlabs_voice_id are required for ElevenLabs TTS")
+            raise ProviderUnavailable(
+                "ELEVENLABS_API_KEY and elevenlabs_voice_id are required for ElevenLabs TTS"
+            )
         path = store.reserve_path(".mp3")
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-                    headers={"xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg"},
+                    headers={
+                        "xi-api-key": key,
+                        "Content-Type": "application/json",
+                        "Accept": "audio/mpeg",
+                    },
                     json={"text": text, "model_id": "eleven_multilingual_v2"},
                 )
             if resp.status_code >= 400:
                 raise VoiceProtocolError("tts_failed", sanitize_provider_error(resp.text))
             if len(resp.content) > config.max_tts_audio_bytes:
-                raise VoiceProtocolError("tts_too_large", f"TTS audio exceeds {config.max_tts_audio_mb}MB cap")
+                raise VoiceProtocolError(
+                    "tts_too_large", f"TTS audio exceeds {config.max_tts_audio_mb}MB cap"
+                )
             path.write_bytes(resp.content)
             return SynthesizedAudio(path=path, mime=mime_for_path(path), provider=self.name)
         except BaseException:

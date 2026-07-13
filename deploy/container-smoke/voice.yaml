@@ -1,0 +1,16 @@
+server:
+  host: "0.0.0.0"
+  port: 8787
+  public_base_url: "http://localhost:8787"
+  allowed_hosts: ["localhost", "127.0.0.1"]
+  state_dir: "/data"
+
+auth:
+  mode: "service"
+  service_token_env: "VOICE_CONSOLE_SERVICE_TOKEN"
+  scope_secret_env: "VOICE_CONSOLE_SCOPE_SECRET"
+
+voice:
+  stt_provider: "fake"
+  tts_provider: "fake"
+  speak_replies_default: true

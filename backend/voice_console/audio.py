@@ -4,6 +4,7 @@ import os
 import stat
 import tempfile
 import wave
+from contextlib import suppress
 from pathlib import Path
 
 from .protocol import VoiceProtocolError
@@ -40,10 +41,8 @@ class OwnedAudioStore:
     def __init__(self, base_dir: str | Path | None = None) -> None:
         self.base_dir = Path(base_dir or tempfile.gettempdir()) / "hermes-voice-console-audio"
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        try:
+        with suppress(OSError):  # pragma: no cover - filesystem-specific
             os.chmod(self.base_dir, 0o700)
-        except OSError:  # pragma: no cover - filesystem-specific
-            pass
         self._owned: set[Path] = set()
 
     def reserve_path(self, suffix: str) -> Path:
@@ -58,10 +57,8 @@ class OwnedAudioStore:
     def write_bytes(self, data: bytes, suffix: str) -> Path:
         path = self.reserve_path(suffix)
         path.write_bytes(data)
-        try:
+        with suppress(OSError):  # pragma: no cover
             os.chmod(path, 0o600)
-        except OSError:  # pragma: no cover
-            pass
         return path
 
     def write_wav(self, pcm16: bytes) -> Path:
@@ -71,10 +68,8 @@ class OwnedAudioStore:
             wav.setsampwidth(SAMPLE_WIDTH)
             wav.setframerate(SAMPLE_RATE)
             wav.writeframes(pcm16)
-        try:
+        with suppress(OSError):  # pragma: no cover
             os.chmod(path, 0o600)
-        except OSError:  # pragma: no cover
-            pass
         return path
 
     def validate_for_stream(self, path: str | Path, *, max_bytes: int) -> Path:
@@ -85,7 +80,9 @@ class OwnedAudioStore:
         try:
             owned_path.relative_to(self.base_dir.resolve())
         except ValueError as exc:
-            raise VoiceProtocolError("tts_failed", "TTS audio path is outside console temp dir") from exc
+            raise VoiceProtocolError(
+                "tts_failed", "TTS audio path is outside console temp dir"
+            ) from exc
         try:
             # Use lstat on the original path before following symlinks. A reserved
             # path that is later replaced with a symlink must fail even if the
@@ -98,7 +95,9 @@ class OwnedAudioStore:
         if not stat.S_ISREG(st.st_mode):
             raise VoiceProtocolError("tts_failed", "TTS audio path is not a regular file")
         if st.st_size > max_bytes:
-            raise VoiceProtocolError("tts_too_large", f"TTS audio exceeds {max_bytes // (1024 * 1024)}MB cap")
+            raise VoiceProtocolError(
+                "tts_too_large", f"TTS audio exceeds {max_bytes // (1024 * 1024)}MB cap"
+            )
         return owned_path
 
     def cleanup(self, path: str | Path | None, *, retain: bool = False) -> None:

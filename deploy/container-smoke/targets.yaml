@@ -1,0 +1,6 @@
+targets:
+  fake:
+    label: "Fake Hermes API Server"
+    base_url: "http://fake-target:8787"
+    api_key_env: "FAKE_HERMES_API_KEY"
+    default_session_key: "voice-console:fake"

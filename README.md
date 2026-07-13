@@ -7,7 +7,7 @@ This repository is intentionally separate from `NousResearch/hermes-agent` and f
 ## What ships in this repo
 
 - Python FastAPI backend (`backend/voice_console`) with:
-  - token auth gate for HTTP and WebSocket access;
+  - Clerk human auth, service credentials for automation, and loopback-only development auth;
   - target registry with server-side API key resolution;
   - Hermes API Server capability probing and `/v1/runs` event streaming;
   - approval and stop calls through Hermes API Server;
@@ -51,12 +51,12 @@ Terminal 2:
 
 ```bash
 source .venv/bin/activate
-export VOICE_CONSOLE_SESSION_SECRET="$(openssl rand -hex 32)"
+export VOICE_CONSOLE_SCOPE_SECRET="$(openssl rand -hex 32)"
 export FAKE_HERMES_API_KEY=fake
 voice-console serve --config config/voice.fake.yaml --targets config/targets.fake.yaml
 ```
 
-Open `http://localhost:8787`, enter the console secret from Terminal 2, select the fake target, and use the browser UI. Browser microphone access requires `localhost` or HTTPS.
+Open `http://localhost:8787`, select the fake target, and use the browser UI. The checked-in fake config uses development auth and cannot start on a non-loopback bind or public URL. Browser microphone access requires `localhost` or HTTPS.
 
 ## Real target outline
 
@@ -84,7 +84,9 @@ voice-console fake-e2e
 ## Security defaults
 
 - Binds to `127.0.0.1` by default.
-- Console auth is enabled by default via `VOICE_CONSOLE_SESSION_SECRET`.
+- Human deployments use Clerk; automated clients can use a separate service credential.
+- Development auth is accepted only with loopback bind and loopback public URL.
+- WebSocket credentials are sent only in the first encrypted WSS frame, never in URLs or browser storage.
 - Browser JavaScript never receives Hermes API target keys.
 - Target API keys are read server-side from env vars referenced in YAML.
 - Temp audio is stored in a console-owned directory with mode `0700`; generated files are mode `0600`.

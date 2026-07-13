@@ -1,0 +1,31 @@
+services:
+  fake-target:
+    build:
+      context: ..
+    command: ["voice-console", "fake-target", "--host", "0.0.0.0", "--port", "8787"]
+    networks: [voice-console-smoke]
+
+  console:
+    build:
+      context: ..
+    depends_on:
+      fake-target:
+        condition: service_started
+    environment:
+      VOICE_CONSOLE_SCOPE_SECRET: ${VOICE_CONSOLE_SCOPE_SECRET:?set VOICE_CONSOLE_SCOPE_SECRET}
+      VOICE_CONSOLE_SERVICE_TOKEN: ${VOICE_CONSOLE_SERVICE_TOKEN:?set VOICE_CONSOLE_SERVICE_TOKEN}
+      FAKE_HERMES_API_KEY: fake
+    volumes:
+      - ./container-smoke/voice.yaml:/config/voice.yaml:ro
+      - ./container-smoke/targets.yaml:/config/targets.yaml:ro
+      - console-state:/data
+    ports:
+      - "127.0.0.1:8787:8787"
+    networks: [voice-console-smoke]
+    restart: unless-stopped
+
+networks:
+  voice-console-smoke:
+
+volumes:
+  console-state:

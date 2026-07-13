@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from .config import VoiceConfig
 from .protocol import VoiceProtocolError, validate_turn_id
@@ -11,7 +11,7 @@ from .protocol import VoiceProtocolError, validate_turn_id
 MAX_CANCELLED_TURNS = 256
 
 
-class RecordingState(str, Enum):
+class RecordingState(StrEnum):
     IDLE = "idle"
     RECORDING = "recording"
 
@@ -39,7 +39,9 @@ class RecordingSession:
         self._recording_started_at = time.monotonic()
 
     def _expired(self) -> bool:
-        return time.monotonic() - self._recording_started_at > self.config.max_recording_wall_seconds
+        return (
+            time.monotonic() - self._recording_started_at > self.config.max_recording_wall_seconds
+        )
 
     def _reset(self) -> None:
         self.state = RecordingState.IDLE
@@ -48,13 +50,19 @@ class RecordingSession:
 
     def add_audio(self, chunk: bytes) -> None:
         if self.state is not RecordingState.RECORDING:
-            raise VoiceProtocolError("audio_outside_recording", "binary audio frame received outside RECORDING state")
+            raise VoiceProtocolError(
+                "audio_outside_recording", "binary audio frame received outside RECORDING state"
+            )
         if self._expired():
             self._reset()
-            raise VoiceProtocolError("recording_timeout", "recording exceeded max wall-clock duration")
+            raise VoiceProtocolError(
+                "recording_timeout", "recording exceeded max wall-clock duration"
+            )
         if len(self._buf) + len(chunk) > self.config.max_recording_bytes:
             self._reset()
-            raise VoiceProtocolError("recording_too_large", "recording exceeded max buffer / duration limit")
+            raise VoiceProtocolError(
+                "recording_too_large", "recording exceeded max buffer / duration limit"
+            )
         self._buf.extend(chunk)
 
     def stop_recording(self, turn_id: str) -> tuple[str, bytes]:
@@ -62,10 +70,14 @@ class RecordingSession:
             raise VoiceProtocolError("bad_state", f"cannot stop recording from {self.state.value}")
         tid = validate_turn_id(turn_id, required=True)
         if tid != self.turn_id:
-            raise VoiceProtocolError("turn_mismatch", "recording.stop turn_id does not match active recording")
+            raise VoiceProtocolError(
+                "turn_mismatch", "recording.stop turn_id does not match active recording"
+            )
         if self._expired():
             self._reset()
-            raise VoiceProtocolError("recording_timeout", "recording exceeded max wall-clock duration")
+            raise VoiceProtocolError(
+                "recording_timeout", "recording exceeded max wall-clock duration"
+            )
         pcm = bytes(self._buf)
         active = self.turn_id or tid
         self._reset()

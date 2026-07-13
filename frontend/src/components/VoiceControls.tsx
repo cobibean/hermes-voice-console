@@ -24,9 +24,17 @@ export function VoiceControls({
       <button
         className={isRecording ? 'mic recording' : 'mic'}
         disabled={!supported || busy}
-        onPointerDown={() => { if (!isRecording) onStart(); }}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          if (!isRecording) onStart();
+        }}
         onPointerUp={onStop}
-        onPointerLeave={onStop}
+        onKeyDown={(event) => {
+          if ((event.key === 'Enter' || event.key === ' ') && !isRecording) onStart();
+        }}
+        onKeyUp={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') onStop();
+        }}
       >
         {isRecording ? 'Release to send' : busy ? 'Working…' : 'Hold to talk'}
       </button>

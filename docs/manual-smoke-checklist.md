@@ -16,7 +16,7 @@ Use this after backend tests, frontend tests/build, and fake E2E pass.
 1. Build frontend: `cd frontend && pnpm build`.
 2. Start the voice console with real config: `voice-console serve --config config/voice.yaml --targets config/targets.yaml`.
 3. Open `http://localhost:8787` or the HTTPS/Tailscale Serve URL.
-4. Enter `VOICE_CONSOLE_SESSION_SECRET`.
+4. Sign in with Clerk, or confirm the loopback-only development warning for a local fake smoke. Service mode has no interactive browser console.
 5. Select one non-critical Hermes target.
 6. Click **Connect / probe target** and confirm diagnostics show connected and target ready.
 7. Hold the mic button, speak a harmless prompt, release.

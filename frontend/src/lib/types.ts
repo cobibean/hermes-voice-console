@@ -1,15 +1,24 @@
 export interface TargetInfo {
   name: string;
   label: string;
-  base_url: string;
-  default_session_key: string;
   preferred_transport: string;
   api_key_configured: boolean;
+  configured_provider_label?: string | null;
+  configured_model_label?: string | null;
   voice?: { tts_voice?: string };
 }
 
+export type AuthMode = 'clerk' | 'service' | 'development';
+
+export interface PublicConfig {
+  auth_mode: AuthMode;
+  clerk_publishable_key: string | null;
+  public_base_url: string;
+}
+
 export interface Bootstrap {
-  server: { public_base_url: string; auth_required: boolean };
+  server: { public_base_url: string; auth_mode: AuthMode };
+  principal: { kind: string; owner_key: string };
   voice: {
     stt_provider: string;
     tts_provider: string;
@@ -20,12 +29,29 @@ export interface Bootstrap {
   targets: TargetInfo[];
 }
 
+export interface SessionInfo {
+  conversation_id: string;
+  target: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export type VoiceServerEvent =
-  | { type: 'ready'; target: string; session_id: string; capabilities: Record<string, unknown>; stt_provider: string; tts_provider: string; speak_replies: boolean }
+  | { type: 'auth.ok'; principal_kind: string; expires_at: number | null }
+  | { type: 'auth.expiring'; expires_at: number }
+  | { type: 'auth.refreshed'; expires_at: number }
+  | { type: 'run.acceptance_unknown'; turn_id: string; local_turn_id: string; message: string }
+  | { type: 'run.acceptance_unknown.acknowledged'; local_turn_id: string }
+  | { type: 'run.unrecoverable'; run_id: string; turn_id: string; error: string }
+  | { type: 'run.unrecoverable.acknowledged'; run_id: string }
+  | { type: 'run.snapshot'; run_id: string; status: string; last_sequence: number; gap: boolean }
+  | { type: 'ready'; target: string; conversation_id: string; capabilities: Record<string, unknown>; stt_provider: string; tts_provider: string; speak_replies: boolean }
   | { type: 'recording.started'; turn_id: string }
   | { type: 'recording.stopped'; turn_id: string }
+  | { type: 'text.accepted'; turn_id: string }
   | { type: 'transcript.final'; turn_id: string; text: string; provider?: string }
-  | { type: 'agent.run.started'; run_id: string; session_id: string }
+  | { type: 'agent.run.started'; run_id: string; session_id: string; turn_id: string }
   | { type: 'agent.delta'; run_id: string; delta: string }
   | { type: 'agent.tool.started'; run_id: string; tool?: string; preview?: string }
   | { type: 'agent.tool.completed'; run_id: string; tool?: string; error?: boolean; duration?: number }
