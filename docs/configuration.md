@@ -59,12 +59,16 @@ Provider/model labels are optional operator-configured descriptions, not proof o
 
 STT providers are `fake`, `openai`, `groq`, and optional local `faster_whisper`. TTS providers are `fake`, `edge`, `openai`, and `elevenlabs`. Provider credentials stay in the console service environment.
 
+OpenAI STT defaults to `gpt-4o-mini-transcribe`; OpenAI TTS defaults to `gpt-4o-mini-tts`. Both can be overridden in `voice.yaml`, including `whisper-1` or `tts-1` for fallback/comparison.
+
 ## Safety bounds
 
 - `max_recording_seconds` limits audio duration by expected PCM byte count.
 - `max_recording_wall_seconds` limits silent/slow clients that hold recording open.
 - `max_buffer_mb` is the absolute recording buffer cap.
 - `max_tts_text_chars` limits TTS prompt length.
+- `min_recording_seconds` and `min_recording_rms` reject empty or accidental audio before paid transcription.
+- `tts_sentence_max_chars` and `tts_chunk_timeout_seconds` bound sequential speech synthesis.
 - `max_tts_audio_mb` rejects oversized provider output.
 - `server.max_ws_text_chars` limits authenticated text frames.
 - `auth.preauth_max_chars` and `auth.auth_timeout_seconds` bound pre-authentication work.

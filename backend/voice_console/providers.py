@@ -51,7 +51,7 @@ class FakeSttProvider(SttProvider):
         return Transcript(text=text, provider=self.name)
 
 
-class OpenAIWhisperProvider(SttProvider):
+class OpenAISttProvider(SttProvider):
     name = "openai"
 
     async def transcribe(
@@ -256,7 +256,7 @@ def make_stt_provider(name: str) -> SttProvider:
     if normalized in {"fake", "browser_stub_for_tests"}:
         return FakeSttProvider()
     if normalized in {"openai", "openai_whisper"}:
-        return OpenAIWhisperProvider()
+        return OpenAISttProvider()
     if normalized in {"groq", "groq_whisper"}:
         return GroqWhisperProvider()
     if normalized in {"faster_whisper", "faster_whisper_local", "local"}:

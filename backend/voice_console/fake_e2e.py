@@ -134,7 +134,9 @@ def run_fake_e2e() -> dict:
                     seen = [ws.receive_json()]
                     ws.send_text(json.dumps({"type": "recording.start", "turn_id": "fake-turn-1"}))
                     seen.append(ws.receive_json())
-                    ws.send_bytes(b"\x00\x00" * 1600)
+                    # 300 ms deterministic tone-like PCM clears the production
+                    # short/silent-audio guard without weakening it for tests.
+                    ws.send_bytes(b"\xe8\x03" * 4800)
                     ws.send_text(json.dumps({"type": "recording.stop", "turn_id": "fake-turn-1"}))
                     binary_chunks = 0
                     deadline = time.time() + 15

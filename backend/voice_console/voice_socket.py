@@ -24,6 +24,7 @@ from .providers import ProviderUnavailable
 from .run_coordinator import AcceptanceUnknown
 from .run_store import SessionRecord
 from .tts_session import TtsSession
+from .voice_filters import filter_transcript, validate_spoken_audio
 from .voice_session import RecordingSession
 
 if TYPE_CHECKING:
@@ -187,6 +188,7 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
         active_turn, pcm = recording_session.stop_recording(turn_id)
         await send_json({"type": "recording.stopped", "turn_id": active_turn})
         try:
+            validate_spoken_audio(pcm, state.config.voice)
             transcript = await state.stt.transcribe(
                 pcm,
                 config=state.config.voice,
@@ -206,7 +208,7 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
             return
 
         text = validate_input_text(
-            transcript.text,
+            filter_transcript(transcript.text),
             max_chars=state.config.voice.max_input_text_chars,
         )
         await send_json(
@@ -380,6 +382,12 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                 elif message_type == "recording.stop":
                     turn_id = validate_turn_id(message.get("turn_id"), required=True)
                     await finish_recording(turn_id)
+                elif message_type == "recording.cancel":
+                    turn_id = validate_turn_id(message.get("turn_id"), required=True)
+                    if recording_timeout_task and not recording_timeout_task.done():
+                        recording_timeout_task.cancel()
+                    recording_session.discard_recording(turn_id)
+                    await send_json({"type": "recording.discarded", "turn_id": turn_id})
                 elif message_type == "text.submit":
                     active = state.store.active_run_for_conversation(
                         session.conversation_id, owner_key=owner_key

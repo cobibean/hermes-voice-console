@@ -91,6 +91,14 @@ class RecordingSession:
             return True
         return False
 
+    def discard_recording(self, turn_id: str) -> bool:
+        """Discard an interrupted gesture without ever submitting its audio."""
+        tid = validate_turn_id(turn_id, required=True)
+        if self.state is not RecordingState.RECORDING or self.turn_id != tid:
+            return False
+        self._reset()
+        return True
+
     def cancel(self, turn_id: str | None) -> None:
         tid = validate_turn_id(turn_id or "", required=False)
         if not tid:

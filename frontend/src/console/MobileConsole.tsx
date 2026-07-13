@@ -3,6 +3,7 @@ import { ApprovalModal } from '../components/ApprovalModal';
 import { TargetPicker } from '../components/TargetPicker';
 import { TranscriptPanel } from '../components/TranscriptPanel';
 import { VoiceControls } from '../components/VoiceControls';
+import { StatusAnnouncer } from '../components/StatusAnnouncer';
 import { ActivitySheet } from './ActivitySheet';
 import { Composer } from './shared/Composer';
 import type { ConsoleController } from './useConsoleController';
@@ -27,6 +28,7 @@ export function MobileConsole({
         </div>
         {accountControl}
       </header>
+      <StatusAnnouncer status={controller.viewState} />
       {notice}
       <details className="mobile-settings card">
         <summary>Agent and conversation</summary>
@@ -48,6 +50,7 @@ export function MobileConsole({
       ) : null}
       <section className="mobile-conversation">
         <TranscriptPanel transcript={controller.transcript} response={controller.response} />
+        <p className="ai-voice-disclosure mobile-ai-disclosure">Spoken replies use an AI-generated voice.</p>
       </section>
       <details className="mobile-activity card">
         <summary>Activity and diagnostics</summary>
@@ -60,7 +63,13 @@ export function MobileConsole({
         onSpeakReplies={controller.setSpeakReplies}
         onStart={controller.startRecording}
         onStop={controller.stopRecording}
+        onDiscard={controller.discardRecording}
         onCancelSpeech={controller.cancelSpeech}
+        inputLevel={controller.inputLevel}
+        elapsed={controller.recordingElapsed}
+        maxSeconds={bootstrap.voice.max_recording_seconds}
+        speechFallbackAvailable={controller.speechFallbackAvailable}
+        onRetrySpeech={controller.retrySpeech}
       />
       <div className="mobile-composer-dock"><Composer controller={controller} compact /></div>
       <ApprovalModal approval={controller.approval} onResolve={controller.resolveApproval} />

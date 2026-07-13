@@ -50,7 +50,13 @@ export function ConsoleContent({
         onSpeakReplies={controller.setSpeakReplies}
         onStart={controller.startRecording}
         onStop={controller.stopRecording}
+        onDiscard={controller.discardRecording}
         onCancelSpeech={controller.cancelSpeech}
+        inputLevel={controller.inputLevel}
+        elapsed={controller.recordingElapsed}
+        maxSeconds={bootstrap.voice.max_recording_seconds}
+        speechFallbackAvailable={controller.speechFallbackAvailable}
+        onRetrySpeech={controller.retrySpeech}
       />
 
       <div className="grid two console-workspace">

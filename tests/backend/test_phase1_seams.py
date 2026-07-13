@@ -4,8 +4,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from voice_console.audio import OwnedAudioStore
 from voice_console.config import TargetConfig, VoiceConfig
 from voice_console.protocol import VoiceProtocolError
+from voice_console.providers import FakeTtsProvider
 from voice_console.run_manager import RunManager
 from voice_console.run_store import ConnectionRunStore
 from voice_console.session_manager import SessionManager
@@ -100,3 +102,41 @@ async def test_tts_session_cancel_is_connection_local() -> None:
     await tts.cancel("turn-1")
     assert recording.is_cancelled("turn-1")
     assert sent == [{"type": "tts.cancelled", "turn_id": "turn-1"}]
+
+
+@pytest.mark.asyncio
+async def test_tts_session_streams_identified_sentence_chunks_sequentially(tmp_path) -> None:
+    sent: list[dict[str, Any]] = []
+    binary = 0
+
+    async def send_json(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def send_bytes(_chunk: bytes) -> None:
+        nonlocal binary
+        binary += 1
+
+    async def send_error(error: VoiceProtocolError) -> None:
+        raise AssertionError(error.message)
+
+    config = VoiceConfig(tts_sentence_max_chars=80)
+    tts = TtsSession(
+        config=config,
+        provider=FakeTtsProvider(),
+        audio_store=OwnedAudioStore(tmp_path),
+        recording_session=RecordingSession(config),
+        send_json=send_json,
+        send_bytes=send_bytes,
+        send_error=send_error,
+    )
+    tts.start("turn-voice", "First sentence. Second sentence.")
+    assert tts.task is not None
+    await tts.task
+    assert [(item["type"], item.get("chunk_index")) for item in sent] == [
+        ("tts.start", 0),
+        ("tts.end", 0),
+        ("tts.start", 1),
+        ("tts.end", 1),
+        ("tts.complete", None),
+    ]
+    assert binary == 2

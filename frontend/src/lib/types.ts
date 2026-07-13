@@ -49,6 +49,7 @@ export type VoiceServerEvent =
   | { type: 'ready'; target: string; conversation_id: string; capabilities: Record<string, unknown>; stt_provider: string; tts_provider: string; speak_replies: boolean }
   | { type: 'recording.started'; turn_id: string }
   | { type: 'recording.stopped'; turn_id: string }
+  | { type: 'recording.discarded'; turn_id: string }
   | { type: 'text.accepted'; turn_id: string }
   | { type: 'transcript.final'; turn_id: string; text: string; provider?: string }
   | { type: 'agent.run.started'; run_id: string; session_id: string; turn_id: string }
@@ -62,8 +63,9 @@ export type VoiceServerEvent =
   | { type: 'agent.completed'; run_id: string; text: string; usage?: Record<string, unknown> }
   | { type: 'agent.failed'; run_id?: string; error: string }
   | { type: 'agent.stopped'; run_id?: string }
-  | { type: 'tts.start'; turn_id: string; mime: string; provider?: string }
-  | { type: 'tts.end'; turn_id: string }
+  | { type: 'tts.start'; turn_id: string; chunk_index: number; mime: string; provider?: string }
+  | { type: 'tts.end'; turn_id: string; chunk_index: number }
+  | { type: 'tts.complete'; turn_id: string }
   | { type: 'tts.cancelled'; turn_id: string }
   | { type: 'error'; code: string; message: string; recoverable: boolean }
   | { type: 'pong' }

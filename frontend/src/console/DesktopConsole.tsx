@@ -3,6 +3,7 @@ import { ApprovalModal } from '../components/ApprovalModal';
 import { TargetPicker } from '../components/TargetPicker';
 import { TranscriptPanel } from '../components/TranscriptPanel';
 import { VoiceControls } from '../components/VoiceControls';
+import { StatusAnnouncer } from '../components/StatusAnnouncer';
 import { RunInspector } from './RunInspector';
 import { Composer } from './shared/Composer';
 import { ConsoleHeader } from './shared/ConsoleHeader';
@@ -23,6 +24,7 @@ export function DesktopConsole({
   return (
     <main className="shell desktop-console" data-console-shell="desktop" data-view-state={controller.viewState}>
       <ConsoleHeader accountControl={accountControl} />
+      <StatusAnnouncer status={controller.viewState} />
       {notice}
       <div className="desktop-command-grid">
         <aside className="session-rail card" aria-label="Conversations">
@@ -68,7 +70,13 @@ export function DesktopConsole({
             onSpeakReplies={controller.setSpeakReplies}
             onStart={controller.startRecording}
             onStop={controller.stopRecording}
+            onDiscard={controller.discardRecording}
             onCancelSpeech={controller.cancelSpeech}
+            inputLevel={controller.inputLevel}
+            elapsed={controller.recordingElapsed}
+            maxSeconds={bootstrap.voice.max_recording_seconds}
+            speechFallbackAvailable={controller.speechFallbackAvailable}
+            onRetrySpeech={controller.retrySpeech}
           />
         </section>
 

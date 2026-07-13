@@ -240,6 +240,7 @@ Client to backend:
 {"type":"recording.start","turn_id":"vturn_..."}
 <binary PCM16 mono 16k chunks>
 {"type":"recording.stop","turn_id":"vturn_..."}
+{"type":"recording.cancel","turn_id":"vturn_..."}
 {"type":"agent.stop","run_id":"..."}
 {"type":"approval.resolve","run_id":"...","decision":"once|session|always|deny"}
 {"type":"tts.cancel","turn_id":"..."}
@@ -252,15 +253,17 @@ Backend to client:
 {"type":"ready","target":"knwldg","capabilities":{...},"stt_provider":"...","tts_provider":"..."}
 {"type":"recording.started","turn_id":"..."}
 {"type":"recording.stopped","turn_id":"..."}
+{"type":"recording.discarded","turn_id":"..."}
 {"type":"transcript.final","turn_id":"...","text":"...","latency_ms":123}
 {"type":"agent.run.started","run_id":"...","session_id":"..."}
 {"type":"agent.delta","run_id":"...","delta":"..."}
 {"type":"agent.tool.started","run_id":"...","tool":"terminal","preview":"..."}
 {"type":"agent.approval.request","run_id":"...","approval":{...}}
 {"type":"agent.completed","run_id":"...","text":"...","usage":{...}}
-{"type":"tts.start","turn_id":"...","mime":"audio/mpeg"}
+{"type":"tts.start","turn_id":"...","chunk_index":0,"mime":"audio/mpeg"}
 <binary TTS audio chunks>
-{"type":"tts.end","turn_id":"..."}
+{"type":"tts.end","turn_id":"...","chunk_index":0}
+{"type":"tts.complete","turn_id":"..."}
 {"type":"error","code":"...","message":"...","recoverable":true}
 {"type":"pong"}
 ```
@@ -281,7 +284,7 @@ Do not import private Hermes internals as the primary path. Implement provider a
 
 STT V1 providers:
 
-- `openai_whisper`: uses OpenAI-compatible audio transcription API. Accept `OPENAI_API_KEY` or `VOICE_TOOLS_OPENAI_KEY`.
+- `openai`: uses the OpenAI transcription API and defaults to `gpt-4o-mini-transcribe`; `whisper-1` remains configurable. Accept `OPENAI_API_KEY` or `VOICE_TOOLS_OPENAI_KEY`.
 - `groq_whisper`: optional if `GROQ_API_KEY` is set.
 - `faster_whisper_local`: optional local provider behind extras.
 - `fake_stt`: test provider.
@@ -289,7 +292,7 @@ STT V1 providers:
 TTS V1 providers:
 
 - `edge_tts`: default free network provider where acceptable.
-- `openai_tts`: optional paid provider.
+- `openai`: paid provider using `gpt-4o-mini-tts` by default, with `tts-1` configurable as a fallback.
 - `elevenlabs_tts`: optional provider.
 - `fake_tts`: test provider.
 

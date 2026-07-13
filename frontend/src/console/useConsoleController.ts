@@ -58,6 +58,10 @@ export interface ConsoleController {
   isCaptureSupported: boolean;
   loadError?: string;
   response: string;
+  inputLevel: number;
+  recordingElapsed: number;
+  speechFallbackAvailable: boolean;
+  retrySpeech: () => void;
   textDraft: string;
   setTextDraft: (value: string) => void;
   submitText: () => Promise<void>;
@@ -73,6 +77,7 @@ export interface ConsoleController {
   startRecording: () => Promise<void>;
   state: typeof initialConsoleState;
   stopRecording: () => void;
+  discardRecording: () => void;
   stopRun: () => void;
   timeline: TimelineItem[];
   transcript: string;
@@ -106,11 +111,19 @@ export function useConsoleController({
     message: string;
   } | null>(null);
   const [connected, setConnected] = useState(false);
+  const [inputLevel, setInputLevel] = useState(0);
+  const [recordingElapsed, setRecordingElapsed] = useState(0);
+  const [speechFallbackAvailable, setSpeechFallbackAvailable] = useState(false);
   const clientRef = useRef<VoiceClient | null>(null);
   const clientSignatureRef = useRef('');
   const captureRef = useRef<CaptureSession | null>(null);
-  const playbackRef = useRef(new PlaybackQueue());
+  const playbackRef = useRef(new PlaybackQueue(
+    undefined,
+    undefined,
+    setSpeechFallbackAvailable,
+  ));
   const stopRequestedRef = useRef(false);
+  const discardRequestedRef = useRef(false);
   const activeRunIdRef = useRef<string | null>(null);
   const activeTurnIdRef = useRef<string | null>(null);
   const lastSequenceRef = useRef(0);
@@ -128,6 +141,17 @@ export function useConsoleController({
     void captureRef.current?.stop();
     playbackRef.current.cancel(playbackRef.current.activeTurnId ?? '');
   }, [closeClient]);
+
+  useEffect(() => {
+    if (state.recording !== 'recording') {
+      setInputLevel(0);
+      if (state.recording === 'idle') setRecordingElapsed(0);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setRecordingElapsed((Date.now() - startedAt) / 1000), 100);
+    return () => window.clearInterval(timer);
+  }, [state.recording]);
 
   useEffect(() => {
     const first = bootstrap?.targets[0];
@@ -238,10 +262,10 @@ export function useConsoleController({
       activeRunIdRef.current = null;
       clearRecovery();
     }
-    if (event.type === 'tts.start') playbackRef.current.start(event.turn_id);
-    if (event.type === 'tts.end') playbackRef.current.end(event.turn_id);
+    if (event.type === 'tts.start') playbackRef.current.start(event.turn_id, event.chunk_index, event.mime);
+    if (event.type === 'tts.end') playbackRef.current.end(event.turn_id, event.chunk_index);
+    if (event.type === 'tts.complete') playbackRef.current.complete(event.turn_id);
     if (event.type === 'tts.cancelled') playbackRef.current.cancel(event.turn_id);
-    if (event.type === 'error') dispatch({ type: 'error', message: event.message });
   }, [appendEvent, selectedTarget, sessionKey]);
 
   const connect = useCallback(async () => {
@@ -274,17 +298,24 @@ export function useConsoleController({
   const startRecording = useCallback(async () => {
     const turnId = nextTurnId();
     stopRequestedRef.current = false;
+    discardRequestedRef.current = false;
+    void playbackRef.current.unlock();
     activeTurnIdRef.current = turnId;
     dispatch({ type: 'recording.start', turnId });
     try {
       const client = await connect();
       await client.startRecording(turnId);
+      if (discardRequestedRef.current) {
+        client.cancelRecording(turnId);
+        dispatch({ type: 'recording.discard' });
+        return;
+      }
       if (stopRequestedRef.current) {
         client.stopRecording(turnId);
         dispatch({ type: 'recording.stop' });
         return;
       }
-      const capture = await startPcm16Capture((chunk) => client.sendAudio(chunk));
+      const capture = await startPcm16Capture((chunk) => client.sendAudio(chunk), setInputLevel);
       captureRef.current = capture;
       if (stopRequestedRef.current) {
         client.stopRecording(turnId);
@@ -327,6 +358,34 @@ export function useConsoleController({
     captureRef.current = null;
   }, [state.activeTurnId, state.recording]);
 
+  const discardRecording = useCallback(() => {
+    const turnId = activeTurnIdRef.current ?? state.activeTurnId;
+    discardRequestedRef.current = true;
+    stopRequestedRef.current = false;
+    dispatch({ type: 'recording.discard' });
+    void captureRef.current?.stop();
+    captureRef.current = null;
+    setInputLevel(0);
+    if (turnId && clientRef.current?.isOpen) clientRef.current.cancelRecording(turnId);
+  }, [state.activeTurnId]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden' && (state.recording === 'recording' || state.recording === 'connecting')) {
+        discardRecording();
+      }
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted || !clientRef.current?.isOpen) void connect().catch(() => undefined);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [connect, discardRecording, state.recording]);
+
   const cancelSpeech = useCallback(() => {
     const turnId = playbackRef.current.activeTurnId ?? activeTurnIdRef.current ?? '';
     playbackRef.current.cancel(turnId);
@@ -334,8 +393,13 @@ export function useConsoleController({
     dispatch({ type: 'playback.cancel' });
   }, []);
 
+  const retrySpeech = useCallback(() => {
+    void playbackRef.current.retry();
+  }, []);
+
   const setSpeakReplies = useCallback((value: boolean) => {
     if (!value) cancelSpeech();
+    if (value) void playbackRef.current.unlock();
     if (value !== speakReplies) closeClient();
     setSpeakRepliesState(value);
   }, [cancelSpeech, closeClient, speakReplies]);
@@ -391,10 +455,14 @@ export function useConsoleController({
     closeClient,
     connect,
     connected,
+    discardRecording,
+    inputLevel,
     isCaptureSupported: browserSupportsCapture(),
     loadError,
     newConversation,
     response,
+    recordingElapsed,
+    retrySpeech,
     resolveApproval,
     selectSession,
     selectTarget,
@@ -404,6 +472,7 @@ export function useConsoleController({
     setTextDraft,
     setSpeakReplies,
     speakReplies,
+    speechFallbackAvailable,
     startRecording,
     state,
     submitText,
@@ -422,9 +491,13 @@ export function useConsoleController({
     closeClient,
     connect,
     connected,
+    discardRecording,
+    inputLevel,
     loadError,
     newConversation,
     response,
+    recordingElapsed,
+    retrySpeech,
     resolveApproval,
     selectSession,
     selectTarget,
@@ -433,6 +506,7 @@ export function useConsoleController({
     sessions,
     setSpeakReplies,
     speakReplies,
+    speechFallbackAvailable,
     startRecording,
     state,
     submitText,

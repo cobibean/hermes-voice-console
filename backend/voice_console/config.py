@@ -75,6 +75,16 @@ def _int(value: Any, default: int, *, minimum: int | None = None) -> int:
     return out
 
 
+def _float(value: Any, default: float, *, minimum: float | None = None) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        out = default
+    if minimum is not None:
+        out = max(minimum, out)
+    return out
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     host: str = "127.0.0.1"
@@ -120,12 +130,16 @@ class VoiceConfig:
     retain_audio_debug: bool = False
     temp_dir: str | None = None
     fake_transcript: str = "hello hermes"
-    openai_stt_model: str = "whisper-1"
+    openai_stt_model: str = "gpt-4o-mini-transcribe"
     groq_stt_model: str = "whisper-large-v3-turbo"
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "alloy"
     edge_tts_voice: str = "en-US-AriaNeural"
     elevenlabs_voice_id: str = ""
+    min_recording_seconds: float = 0.25
+    min_recording_rms: int = 90
+    tts_sentence_max_chars: int = 420
+    tts_chunk_timeout_seconds: int = 45
 
     @property
     def max_buffer_bytes(self) -> int:
@@ -294,12 +308,16 @@ def load_console_config(path: str | Path) -> ConsoleConfig:
         retain_audio_debug=_bool(vraw.get("retain_audio_debug"), False),
         temp_dir=(str(vraw.get("temp_dir")).strip() if vraw.get("temp_dir") else None),
         fake_transcript=str(vraw.get("fake_transcript", "hello hermes")),
-        openai_stt_model=str(vraw.get("openai_stt_model", "whisper-1")),
+        openai_stt_model=str(vraw.get("openai_stt_model", "gpt-4o-mini-transcribe")),
         groq_stt_model=str(vraw.get("groq_stt_model", "whisper-large-v3-turbo")),
         openai_tts_model=str(vraw.get("openai_tts_model", "gpt-4o-mini-tts")),
         openai_tts_voice=str(vraw.get("openai_tts_voice", "alloy")),
         edge_tts_voice=str(vraw.get("edge_tts_voice", "en-US-AriaNeural")),
         elevenlabs_voice_id=str(vraw.get("elevenlabs_voice_id", "")),
+        min_recording_seconds=_float(vraw.get("min_recording_seconds"), 0.25, minimum=0.05),
+        min_recording_rms=_int(vraw.get("min_recording_rms"), 90, minimum=0),
+        tts_sentence_max_chars=_int(vraw.get("tts_sentence_max_chars"), 420, minimum=80),
+        tts_chunk_timeout_seconds=_int(vraw.get("tts_chunk_timeout_seconds"), 45, minimum=5),
     )
     if voice.sample_rate != 16_000:
         raise ConfigError("V1 voice protocol requires sample_rate: 16000")

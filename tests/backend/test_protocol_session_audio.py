@@ -12,6 +12,11 @@ from voice_console.protocol import (
     validate_turn_id,
 )
 from voice_console.providers import FakeSttProvider, FakeTtsProvider
+from voice_console.voice_filters import (
+    filter_transcript,
+    prepare_tts_sentences,
+    validate_spoken_audio,
+)
 from voice_console.voice_session import RecordingSession
 
 
@@ -66,6 +71,40 @@ def test_recording_stop_requires_matching_turn_and_clears_buffer():
     assert pcm == b"\x00\x00" * 10
     assert session.buffer_size == 0
     assert session.turn_id is None
+
+
+def test_recording_discard_clears_audio_without_returning_it():
+    session = RecordingSession(VoiceConfig())
+    session.start_recording("discard-me")
+    session.add_audio(b"\xe8\x03" * 4800)
+    assert session.discard_recording("discard-me") is True
+    assert session.buffer_size == 0
+    with pytest.raises(VoiceProtocolError) as exc:
+        session.stop_recording("discard-me")
+    assert exc.value.code == "bad_state"
+
+
+def test_voice_filters_reject_silence_and_known_hallucinations():
+    config = VoiceConfig()
+    with pytest.raises(VoiceProtocolError, match="No speech"):
+        validate_spoken_audio(b"\x00\x00" * 4800, config)
+    validate_spoken_audio(b"\xe8\x03" * 4800, config)
+    with pytest.raises(VoiceProtocolError, match="reliable speech"):
+        filter_transcript("Thanks for watching!")
+    assert filter_transcript("  Give JobHunter a status check. ") == "Give JobHunter a status check."
+
+
+def test_tts_preparation_strips_private_and_markdown_content_and_bounds_chunks():
+    chunks = prepare_tts_sentences(
+        "<think>secret reasoning</think> # Result\nUse **this answer**. [Docs](https://example.test).",
+        total_cap=200,
+        sentence_cap=80,
+    )
+    spoken = " ".join(chunks)
+    assert "secret" not in spoken
+    assert "**" not in spoken
+    assert "https://" not in spoken
+    assert all(len(chunk) <= 80 for chunk in chunks)
 
 
 def test_recording_size_and_wall_caps():

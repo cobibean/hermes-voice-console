@@ -12,7 +12,10 @@ export function browserSupportsCapture(): boolean {
   );
 }
 
-export async function startPcm16Capture(onChunk: (chunk: ArrayBuffer) => void): Promise<CaptureSession> {
+export async function startPcm16Capture(
+  onChunk: (chunk: ArrayBuffer) => void,
+  onLevel?: (level: number) => void,
+): Promise<CaptureSession> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
@@ -20,7 +23,13 @@ export async function startPcm16Capture(onChunk: (chunk: ArrayBuffer) => void): 
   await ctx.audioWorklet.addModule('/voice/pcm-worklet.js');
   const source = ctx.createMediaStreamSource(stream);
   const node = new AudioWorkletNode(ctx, 'pcm16-downsampler');
-  node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => onChunk(event.data);
+  node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+    const pcm = new Int16Array(event.data);
+    let sum = 0;
+    for (const sample of pcm) sum += (sample / 32768) ** 2;
+    onLevel?.(Math.min(1, Math.sqrt(sum / Math.max(1, pcm.length)) * 5));
+    onChunk(event.data);
+  };
   source.connect(node);
   const sink = ctx.createGain();
   sink.gain.value = 0;

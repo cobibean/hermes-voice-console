@@ -171,6 +171,10 @@ export class VoiceClient {
     this.sendJson({ type: 'recording.stop', turn_id: turnId });
   }
 
+  cancelRecording(turnId: string): void {
+    this.sendJson({ type: 'recording.cancel', turn_id: turnId });
+  }
+
   sendText(turnId: string, text: string): void {
     this.sendJson({ type: 'text.submit', turn_id: turnId, text });
   }
