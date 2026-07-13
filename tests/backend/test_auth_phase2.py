@@ -103,6 +103,14 @@ def test_clerk_rs256_claims_origin_and_user_allowlist(monkeypatch) -> None:
     assert disallowed_user.value.forbidden is True
 
 
+def test_clerk_mode_accepts_optional_service_credential(monkeypatch) -> None:
+    monkeypatch.setenv("VOICE_CONSOLE_SERVICE_TOKEN", "service-token-000000000000000")
+    gate, _private_key = clerk_gate(monkeypatch)
+    context = gate.authenticate_token("service-token-000000000000000")
+    assert context.principal_kind == "service"
+    assert context.principal_subject == "default"
+
+
 def test_clerk_rejects_non_rs256(monkeypatch) -> None:
     gate, _private_key = clerk_gate(monkeypatch)
     now = int(time.time())

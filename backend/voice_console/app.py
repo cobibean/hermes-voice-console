@@ -228,10 +228,9 @@ def create_app(
         if not state.auth.validate_host(ws.headers.get("host")):
             await ws.close(code=4403, reason="Host is not allowed")
             return
-        origin_required = state.auth.mode.value in {"clerk", "development"}
         if not state.auth.validate_origin(
             ws.headers.get("origin"),
-            required=origin_required,
+            required=False,
         ):
             await ws.close(code=4403, reason="Origin is not allowed")
             return

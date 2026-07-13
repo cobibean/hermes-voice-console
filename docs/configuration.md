@@ -11,7 +11,7 @@
 
 `auth.mode` is explicit and must be one of:
 
-- `clerk` - interactive human access. Configure an exact HTTPS issuer, publishable key, exact allowed origins, and optional allowed user IDs. The publishable key is the only Clerk value returned by `/api/public-config`.
+- `clerk` - interactive human access. Configure an exact HTTPS issuer, publishable key, exact allowed origins, and optional allowed user IDs. When `VOICE_CONSOLE_SERVICE_TOKEN` is also configured, the same deployment accepts that separate credential for programmatic clients. The publishable key is the only Clerk value returned by `/api/public-config`.
 - `service` - programmatic-only access. Set the env var named by `auth.service_token_env`, normally `VOICE_CONSOLE_SERVICE_TOKEN`. The browser shows an informational screen and never asks for this token.
 - `development` - credential-free local interaction. Startup fails unless both the bind host and `public_base_url` are loopback. Never place this mode behind Tailscale or another proxy.
 

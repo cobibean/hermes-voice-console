@@ -146,6 +146,10 @@ class AuthGate:
             if not expected or not hmac.compare_digest(token, expected):
                 raise AuthFailure("invalid service credential")
             return self._context("service", "default")
+        if self.mode is AuthMode.CLERK:
+            expected = self.service_token
+            if expected and hmac.compare_digest(token, expected):
+                return self._context("service", "default")
 
         try:
             header = jwt.get_unverified_header(token)
