@@ -1,28 +1,28 @@
 # Portable Hermes Voice Console Design
 
 **Date:** 2026-07-12
-**Status:** Approved
+**Status:** Awaiting re-approval after product and Hermes-runtime corrections
 **Product boundary:** Standalone open-source project
 
 ## Summary
 
-Hermes Voice Console is a portable, mobile-first browser voice client for any Hermes API Server. Hermes remains the agent, reasoning runtime, tool host, memory owner, and delegation layer. The console supplies authenticated remote voice input, streamed operational visibility, approvals, and spoken output without importing or modifying Hermes source.
+Hermes Voice Console is a portable browser control surface with a rich desktop command center and a deliberately simplified mobile companion. Hermes is the agent harness/runtime: it resolves the configured provider and model, assembles context, runs the agent/tool loop, persists sessions, connects memory, enforces approvals, and coordinates delegation. The provider-selected model performs language-model inference. The console supplies authenticated voice and text input, operational visibility, approvals, and spoken output without importing or modifying Hermes source.
 
-The first production deployment will run beside the JobHunter Hermes profile on the `hermes-fleet-1` DigitalOcean droplet. Co-location is a deployment choice, not an architectural dependency. The same console must also support a central host connecting to one or more remote Hermes agents over a trusted private network.
+The first live reference deployment will run beside the JobHunter Hermes profile on the `hermes-fleet-1` DigitalOcean droplet using Clerk development authentication over the tailnet. Co-location is a deployment choice, not an architectural dependency. The same console must also support a central host connecting to one or more remote Hermes agents over a trusted private network.
 
-OpenAI Realtime conversation mode is deferred. Version one uses a turn-based voice wrapper around the real Hermes runtime and its existing Codex OAuth provider.
+OpenAI Realtime conversation mode is deferred. Version one uses a turn-based voice wrapper around the Hermes harness. JobHunter currently selects `gpt-5.5` through Hermes' `openai-codex` provider using Codex OAuth; the console calls Hermes rather than the model directly and pays separately for STT/TTS.
 
 ## Goals
 
-- Talk to Hermes from laptop and phone through a secure browser interface.
-- Preserve Hermes as the sole agent and source of tool, memory, and delegation behavior.
+- Talk to a Hermes-powered agent from a rich laptop/desktop workspace and a simplified phone interface.
+- Preserve Hermes as the sole agent harness/runtime and source of context assembly, tool execution, memory integration, approvals, session persistence, and delegation behavior.
 - Use the supported Hermes API Server contract rather than source patches.
 - Support push-to-talk, transcript display, streamed run events, approvals, stopping, and TTS playback.
 - Authenticate human users with Clerk.
 - Retain an optional machine credential for automated smoke tests and programmatic clients.
 - Run on the Hermes host or any other trusted host that can reach configured Hermes targets.
 - Ship as a reproducible open-source package with portable deployment guidance.
-- Produce real-world evidence suitable for a small upstream Hermes integration PR.
+- Produce real-world evidence that can support a focused upstream capability discussion if a generic gap remains.
 
 ## Non-goals for version one
 
@@ -40,15 +40,15 @@ OpenAI Realtime conversation mode is deferred. Version one uses a turn-based voi
 1. The user opens the Voice Console over HTTPS on a laptop or phone.
 2. Clerk restores an existing session or presents sign-in.
 3. The console authorizes the Clerk user against the deployment allowlist.
-4. The user selects a Hermes target and stable voice-session key.
+4. The user selects an agent target and an owned conversation; the backend maps it to a Hermes transcript session and server-derived memory scope.
 5. The console probes the target and shows distinct console, voice-provider, and Hermes readiness.
 6. The user holds the microphone control, speaks, and releases it.
 7. The console transcribes the completed utterance and automatically starts a Hermes run.
 8. The transcript, agent deltas, tool activity, and run state stream into the interface.
 9. Any approval request pauses for an explicit user decision.
 10. Completed response sentences may enter TTS progressively while text remains visible.
-11. The user may cancel speech without cancelling Hermes, or explicitly stop the run.
-12. Reopening the console restores the stable voice session and recovers active-run state where the Hermes API supports it.
+11. The user may cancel speech without cancelling the agent run, or explicitly request the Hermes harness to stop that run.
+12. Reopening the console restores the owned console conversation and recovers active-run state where the Hermes API supports it.
 
 ## Architecture
 
@@ -62,17 +62,27 @@ One or more Hermes API Server targets
 
 ### Browser application
 
-The React application provides:
+The React application has one shared interaction controller and two intentionally different presentation shells. Authentication, target/session identity, conversation history, voice capture, WebSocket transport, runs, recovery, approvals, playback, and errors live above the shells and are never duplicated.
 
-- Clerk sign-in, sign-out, and account controls.
-- Target and stable session selection.
-- Push-to-talk microphone capture.
-- Text-input fallback for accessibility and diagnostics.
-- Transcript and streamed assistant response.
-- Tool/run timeline and layer-specific diagnostics.
-- Explicit approval actions.
-- Stop-run and cancel-speech controls.
-- Mobile-first layouts and secure-context microphone behavior.
+The desktop command center provides:
+
+- persistent agent/profile, connection, conversation, configured-model, audio, and account status;
+- a target/conversation rail;
+- a central conversation workspace with text and expressive measured-level push-to-talk;
+- a persistent run inspector with normalized tool cards, timeline, approvals, recovery, and diagnostics;
+- keyboard efficiency, resizable/collapsible information regions, and rich state-driven motion.
+
+The desktop composition should feel like a calm live operations cockpit rather than a generic dashboard card grid. Visual energy must come from real microphone, run, tool, approval, and recovery state—not decorative fake activity.
+
+The simplified mobile companion provides:
+
+- a compact agent/conversation/run header;
+- conversation-first content;
+- a safe-area-aware sticky text/voice composer;
+- on-demand target/session settings, run activity, diagnostics, and approval sheets;
+- complete approval, stop, recovery, text fallback, and error visibility with lower persistent density.
+
+Mobile is not the desktop card stack collapsed into one column. Exactly one shell is mounted over the shared controller, so resize and rotation cannot create a second socket or run. Both shells support secure-context microphone behavior, keyboard/screen-reader access, reduced motion, strong focus, and non-hover alternatives.
 
 The browser never receives Hermes API keys, STT/TTS provider secrets, or Clerk server credentials.
 
@@ -85,7 +95,8 @@ The FastAPI service owns:
 - Configurable Hermes target registry.
 - Audio ingestion, bounds, and cleanup.
 - Pluggable STT and TTS providers.
-- Stable voice-session identity.
+- Owned console-conversation identity and authorization.
+- Console-owned session authorization and dialogue-continuity compatibility over Hermes SessionDB messages.
 - Hermes `/v1/runs` transport and event normalization.
 - Approval and cancellation forwarding.
 - Run recovery metadata.
@@ -98,13 +109,22 @@ The backend must not import Hermes internals or assume Hermes is installed local
 Each target is a normal Hermes profile with API Server enabled. The console requires:
 
 - `GET /health`
+- `GET /health/detailed`
 - `GET /v1/capabilities`
+- `GET /v1/models`
+- `GET /v1/toolsets`
 - `POST /v1/runs`
+- `GET /v1/runs/{run_id}`
 - `GET /v1/runs/{run_id}/events`
 - `POST /v1/runs/{run_id}/approval`
 - `POST /v1/runs/{run_id}/stop`
+- `GET /api/sessions`
+- `POST /api/sessions`
+- `GET /api/sessions/{session_id}`
+- `PATCH /api/sessions/{session_id}`
+- `GET /api/sessions/{session_id}/messages`
 
-Hermes continues to own its provider authentication, model selection, workspace, memory, tools, skills, and background delegation.
+Hermes continues to own provider authentication and model resolution, agent/tool execution, the configured workspace, SessionDB persistence, memory integration, approvals, skills, and delegation. The API Server resolves its own platform toolset rather than inheriting Discord's exact tools. Detached background delivery is not available on this surface; `background=true` delegation falls back to synchronous work inside the active run.
 
 ## Authentication and authorization
 
@@ -140,7 +160,7 @@ Local unit and fake E2E tests may inject a test authentication dependency. Any u
 3. Browser sends `recording.start`, then PCM audio frames.
 4. Browser sends `recording.stop` when push-to-talk is released.
 5. Backend applies duration and size limits, then invokes the configured STT provider.
-6. Backend emits the final transcript and starts a Hermes run with the stable session identity.
+6. Backend loads the owned conversation's persisted user/assistant dialogue when needed, emits the final transcript, and starts one Hermes run with explicit conversation history, transcript session identity, and stable memory scope.
 7. Hermes run events stream through the backend to the browser.
 8. Text and tool events update the response and timeline immediately.
 9. Approval events pause for explicit resolution.
@@ -150,15 +170,21 @@ Local unit and fake E2E tests may inject a test authentication dependency. Any u
 
 ## Session and run behavior
 
-- Voice uses a stable API Server session such as `voice-console:job-hunter`.
-- Voice and Discord share the Hermes profile, workspace, persistence layer, provider, and tools, but remain separate platform-scoped sessions.
-- One active Hermes run is allowed per voice session in version one.
+- Each owned console conversation maps to a Hermes `session_id`; New Conversation rotates it.
+- `X-Hermes-Session-Key` is separate, stable, server-derived, and scoped by target/principal for long-term memory. A fixed `voice-console:job-hunter` scope is permitted only for the single-owner reference deployment.
+- V1 intentionally uses a Voice Console-specific long-term-memory identity; it does not silently merge a Clerk user with a Discord or Telegram user/channel.
+- Runs does not automatically load prior SessionDB history from `session_id`. The console fetches persisted session messages and sends non-empty user/assistant dialogue as explicit `conversation_history` before subsequent turns.
+- The messages API may return a different authoritative `session_id` after Hermes compression. The console atomically updates the internal owned mapping to that resolved ID while keeping the same user-visible conversation.
+- Voice and Discord share the Hermes profile, provider/model configuration, workspace, persistence layer, and memory providers, but remain separate platform-scoped sessions and resolve different platform toolsets.
+- One active Hermes run is allowed per owned console conversation/Hermes transcript session in version one.
 - The microphone is disabled while a run is active.
 - Closing or sleeping the browser does not cancel an accepted Hermes run.
+- An ambiguous Runs submission with no returned run ID remains locked and is never retried automatically; only the owner can acknowledge the duplicate risk and release it.
 - Non-secret run and session identifiers support reconnect and recovery.
 - Cancel speech affects playback only.
-- Stop run explicitly interrupts Hermes.
+- Stop run explicitly asks the Hermes harness to interrupt the active run; `stopping` settles as `cancelled`.
 - Voice never silently approves a sensitive action.
+- Approval copy reflects Hermes' real scope: `session` means the current Run on this API surface, while `always` mutates the target's permanent allowlist and is disabled by default. `always` is never shown when `allow_permanent` is false.
 
 ## Failure handling
 
@@ -171,7 +197,7 @@ The UI identifies the failing layer and provides a scoped recovery action:
 - **TTS:** playback unavailable while text remains usable.
 - **Network:** browser-to-console failure versus console-to-Hermes failure.
 
-An STT failure permits retry or text fallback. A TTS failure never loses the answer. Reconnection must not create a duplicate Hermes run.
+An STT failure permits retry or text fallback. A TTS failure never loses the answer. Reconnection must not create a duplicate Hermes run. If polling shows an approval wait but the original approval context was lost, approval is disabled and the user may stop the run instead.
 
 ## Privacy and observability
 
@@ -203,7 +229,9 @@ Laptop or phone
 Voice Console on hermes-fleet-1
   -> 127.0.0.1:8642 with bearer auth
 JobHunter Hermes profile
-  -> existing Codex OAuth and GPT-5.5 runtime
+  -> Hermes harness, API-specific toolset, workspace, sessions, memory
+openai-codex provider via existing Codex OAuth
+  -> configured GPT-5.5 model performs inference
 ```
 
 The Hermes API Server remains loopback-only. Only the Voice Console is exposed through the trusted HTTPS boundary. The console is deployed separately from both the clean Hermes source checkout and the dirty JobHunter operational workspace.
@@ -223,24 +251,24 @@ The Hermes API Server remains loopback-only. Only the Voice Console is exposed t
 
 - Enable API Server through profile configuration only.
 - Verify live health and capabilities.
-- Run one harmless text-only request.
-- Confirm expected profile, workspace, memory, tools, model, and Codex OAuth.
+- Run harmless single-turn, multi-turn, and compression/session-rotation checks through the console's real session/run adapters; raw Hermes calls are preflight only.
+- Confirm expected harness/profile, configured workspace, memory scope, API-specific tools, configured provider/model, and Codex OAuth without treating API aliases as effective-model proof.
 - Verify events, approval, and stop behavior.
 - Confirm setup did not modify Hermes source or JobHunter workspace files.
 
 ### Gate 3: real voice on the droplet
 
-- Real Whisper transcription and selected TTS provider.
-- Desktop push-to-talk, transcript, streamed run, response, and speech.
+- Real configured STT and selected TTS provider.
+- Desktop command-center push-to-talk, conversation, inspector, streamed run, response, and speech.
 - Cancel-speech and stop-run separation.
 - Provider failure recovery and audio cleanup.
 
 ### Gate 4: remote-device proof
 
-- Laptop and phone over Tailscale HTTPS.
+- Rich laptop command center and simplified phone companion over Tailscale HTTPS.
 - Clerk sign-in and allowlist enforcement.
 - Secure-context microphone behavior.
-- Stable session continuity across devices.
+- Owned-conversation dialogue continuity across devices.
 - Mobile sleep, reconnect, and active-run recovery.
 - Mobile approval and stop controls.
 - No raw Hermes API exposure.
@@ -255,7 +283,7 @@ The Hermes API Server remains loopback-only. Only the Voice Console is exposed t
 
 ## Version-one acceptance criteria
 
-From a phone or laptop, an authorized Clerk user can select JobHunter, speak a request, see the transcript, watch Hermes work, hear the response, approve or deny actions, stop the run, cancel speech, and reconnect without duplicating or accidentally cancelling work.
+On a laptop, an authorized Clerk user gets a rich command center with conversations, streamed agent response, tool/run inspection, approvals, and voice. On a phone, the same user gets a purpose-built simplified companion with conversation-first content, sticky voice/text controls, and on-demand activity/settings sheets. Either experience can continue dialogue with JobHunter, hear the response, approve or deny, stop the run, cancel only speech, and reconnect without duplication or accidental cancellation.
 
 The reference deployment uses the existing supported Hermes API Server and requires no Hermes source modification.
 
@@ -273,4 +301,4 @@ Before the first public release it must include:
 - Versioned release and container image.
 - Sanitized real JobHunter smoke evidence.
 
-After the standalone release is proven, submit a small upstream Hermes PR documenting the Voice Console as an API Server frontend/integration. Open a separate upstream design discussion before proposing a larger dashboard or plugin integration. Do not place the console under Hermes `tools/`; it is a user-facing frontend, not an agent-callable tool.
+After the standalone release is proven, re-check overlapping Hermes browser-voice issues and draft work. Ask maintainers whether a documentation listing or a focused generic API improvement is wanted; do not promise an integration PR. The strongest currently identified generic gap is native Runs history loading from `session_id`. Do not place the console under Hermes `tools/`; it is a user-facing frontend, not an agent-callable tool.
