@@ -1,5 +1,7 @@
 # Standalone Hermes Voice Console Plan
 
+> **Superseded on 2026-07-12.** This file preserves early architecture history but is not an implementation source of truth. Use the [current implementation plan](plans/2026-07-12-portable-hermes-voice-console-v1-implementation-plan.md).
+
 Date: 2026-06-16  
 Owner: knwldg for cobibean  
 Repo: `/root/DEV/hermes-voice-console`  

@@ -1,5 +1,7 @@
 # Remote Rollout Next Steps
 
+> **Superseded on 2026-07-12.** Do not execute this rollout note. It predates Clerk authentication, the JobHunter droplet decision, the dual desktop/mobile product direction, and the audited Hermes Runs/session constraints. Use the [current implementation plan](plans/2026-07-12-portable-hermes-voice-console-v1-implementation-plan.md) instead.
+
 Use this when the Hermes agents move onto the Mac mini and the voice console is ready for real-world testing from a phone or laptop.
 
 ## 1. Set Up Remote Access First
@@ -102,7 +104,7 @@ Design direction:
 
 Useful UI pass order:
 
-1. Mobile-first voice screen.
+1. Rich desktop command center.
 2. Desktop command-center layout.
 3. Target/session drawer.
 4. Timeline and transcript visual hierarchy.
