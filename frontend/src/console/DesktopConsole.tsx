@@ -61,7 +61,7 @@ export function DesktopConsole({
               <button onClick={controller.acknowledgeAcceptanceUnknown}>Acknowledge risk and unlock</button>
             </section>
           ) : null}
-          <TranscriptPanel transcript={controller.transcript} response={controller.response} />
+          <TranscriptPanel messages={controller.messages} response={controller.response} />
           <Composer controller={controller} />
           <VoiceControls
             recording={controller.state.recording}
@@ -70,7 +70,6 @@ export function DesktopConsole({
             onSpeakReplies={controller.setSpeakReplies}
             onStart={controller.startRecording}
             onStop={controller.stopRecording}
-            onDiscard={controller.discardRecording}
             onCancelSpeech={controller.cancelSpeech}
             inputLevel={controller.inputLevel}
             elapsed={controller.recordingElapsed}

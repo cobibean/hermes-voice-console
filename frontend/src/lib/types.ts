@@ -37,6 +37,11 @@ export interface SessionInfo {
   updated_at: number;
 }
 
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export type VoiceServerEvent =
   | { type: 'auth.ok'; principal_kind: string; expires_at: number | null }
   | { type: 'auth.expiring'; expires_at: number }

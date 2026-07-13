@@ -1,5 +1,9 @@
 # Troubleshooting
 
+Start with the structured event sequence and correlation guidance in
+[`diagnostics.md`](diagnostics.md). It separates browser capture, STT, Hermes,
+TTS, and playback failures without exposing conversation content or secrets.
+
 ## Browser says microphone unavailable
 
 - Use `localhost`, `127.0.0.1`, or HTTPS/Tailscale Serve. Plain HTTP over a remote hostname is not a secure context.

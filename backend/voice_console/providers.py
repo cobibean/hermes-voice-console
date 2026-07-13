@@ -66,10 +66,13 @@ class OpenAISttProvider(SttProvider):
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 with wav_path.open("rb") as fh:
+                    form = {"model": config.openai_stt_model}
+                    if config.openai_stt_language:
+                        form["language"] = config.openai_stt_language
                     resp = await client.post(
                         "https://api.openai.com/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {key}"},
-                        data={"model": config.openai_stt_model},
+                        data=form,
                         files={"file": ("recording.wav", fh, "audio/wav")},
                     )
             if resp.status_code >= 400:

@@ -131,6 +131,7 @@ class VoiceConfig:
     temp_dir: str | None = None
     fake_transcript: str = "hello hermes"
     openai_stt_model: str = "gpt-4o-mini-transcribe"
+    openai_stt_language: str = ""
     groq_stt_model: str = "whisper-large-v3-turbo"
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "alloy"
@@ -309,6 +310,7 @@ def load_console_config(path: str | Path) -> ConsoleConfig:
         temp_dir=(str(vraw.get("temp_dir")).strip() if vraw.get("temp_dir") else None),
         fake_transcript=str(vraw.get("fake_transcript", "hello hermes")),
         openai_stt_model=str(vraw.get("openai_stt_model", "gpt-4o-mini-transcribe")),
+        openai_stt_language=str(vraw.get("openai_stt_language", "")).strip(),
         groq_stt_model=str(vraw.get("groq_stt_model", "whisper-large-v3-turbo")),
         openai_tts_model=str(vraw.get("openai_tts_model", "gpt-4o-mini-tts")),
         openai_tts_voice=str(vraw.get("openai_tts_voice", "alloy")),

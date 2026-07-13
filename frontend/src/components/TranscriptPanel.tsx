@@ -1,10 +1,30 @@
-export function TranscriptPanel({ transcript, response }: { transcript: string; response: string }) {
+import type { ConversationMessage } from '../lib/types';
+
+export function TranscriptPanel({
+  messages,
+  response,
+}: {
+  messages: ConversationMessage[];
+  response: string;
+}) {
   return (
-    <section className="card">
-      <h2>Transcript</h2>
-      <p className="transcript">{transcript || 'No transcript yet.'}</p>
-      <h2>Agent response</h2>
-      <p className="response">{response || 'No response yet.'}</p>
+    <section className="card conversation-history" aria-label="Conversation messages">
+      <h2>Conversation</h2>
+      <div className="message-list">
+        {messages.length === 0 && !response ? <p className="empty-history">No messages yet.</p> : null}
+        {messages.map((message, index) => (
+          <article className={`message ${message.role}`} key={`${index}-${message.content.slice(0, 24)}`}>
+            <strong>{message.role === 'user' ? 'You' : 'JobHunter'}</strong>
+            <p>{message.content}</p>
+          </article>
+        ))}
+        {response ? (
+          <article className="message assistant streaming">
+            <strong>JobHunter</strong>
+            <p>{response}</p>
+          </article>
+        ) : null}
+      </div>
     </section>
   );
 }

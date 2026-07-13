@@ -19,7 +19,7 @@ _HALLUCINATIONS = {
 def validate_spoken_audio(pcm16: bytes, config: VoiceConfig) -> None:
     duration = len(pcm16) / (config.sample_rate * 2)
     if duration < config.min_recording_seconds:
-        raise VoiceProtocolError("no_speech", "Recording was too short; hold to talk and try again")
+        raise VoiceProtocolError("no_speech", "Recording was too short; start recording and try again")
     samples = array("h")
     samples.frombytes(pcm16)
     if not samples:

@@ -1,4 +1,4 @@
-import type { Bootstrap, PublicConfig, SessionInfo } from './types';
+import type { Bootstrap, ConversationMessage, PublicConfig, SessionInfo } from './types';
 
 export type AuthTokenProvider = (skipCache?: boolean) => Promise<string | null>;
 
@@ -50,4 +50,16 @@ export async function createSession(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ target }),
   });
+}
+
+export async function loadSessionMessages(
+  conversationId: string,
+  target: string,
+  getToken: AuthTokenProvider,
+): Promise<ConversationMessage[]> {
+  const result = await apiFetch<{ messages: ConversationMessage[] }>(
+    `/api/sessions/${encodeURIComponent(conversationId)}/messages?target=${encodeURIComponent(target)}`,
+    getToken,
+  );
+  return result.messages;
 }

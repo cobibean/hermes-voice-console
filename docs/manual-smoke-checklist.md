@@ -19,7 +19,7 @@ Use this after backend tests, frontend tests/build, and fake E2E pass.
 4. Sign in with Clerk, or confirm the loopback-only development warning for a local fake smoke. Service mode has no interactive browser console.
 5. Select one non-critical Hermes target.
 6. Click **Connect / probe target** and confirm diagnostics show connected and target ready.
-7. Hold the mic button, speak a harmless prompt, release.
+7. Tap Start recording, speak a harmless prompt, then tap Send recording.
 8. Confirm transcript appears and is correct enough to send.
 9. Confirm Hermes run timeline shows started, deltas/tool events if any, and completed/failed status.
 10. If **Speak replies** is enabled, confirm one sequential assistant playback with no overlap.

@@ -49,7 +49,7 @@ export function MobileConsole({
         </section>
       ) : null}
       <section className="mobile-conversation">
-        <TranscriptPanel transcript={controller.transcript} response={controller.response} />
+        <TranscriptPanel messages={controller.messages} response={controller.response} />
         <p className="ai-voice-disclosure mobile-ai-disclosure">Spoken replies use an AI-generated voice.</p>
       </section>
       <details className="mobile-activity card">
@@ -63,7 +63,6 @@ export function MobileConsole({
         onSpeakReplies={controller.setSpeakReplies}
         onStart={controller.startRecording}
         onStop={controller.stopRecording}
-        onDiscard={controller.discardRecording}
         onCancelSpeech={controller.cancelSpeech}
         inputLevel={controller.inputLevel}
         elapsed={controller.recordingElapsed}

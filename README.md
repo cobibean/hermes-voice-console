@@ -17,7 +17,7 @@ This repository is intentionally separate from `NousResearch/hermes-agent` and f
   - console-owned temp audio file manager with ownership, regular-file, symlink, and size guards.
 - React/TypeScript/Vite frontend (`frontend`) with:
   - target/session selectors;
-  - push-to-talk mic capture using an AudioWorklet PCM16/16k worklet;
+  - tap-to-record mic capture using an AudioWorklet PCM16/16k worklet;
   - transcript, run timeline, diagnostics, approval modal, stop/cancel controls;
   - generation-aware playback queue that drops stale/canceled TTS chunks.
 - Fake Hermes API Server target and one-command fake E2E (`voice-console fake-e2e`).
@@ -66,6 +66,9 @@ Open `http://localhost:8787`, select the fake target, and use the browser UI. Th
 4. Configure a real STT provider (`openai`, `groq`, or `faster_whisper`) and a real TTS provider (`edge`, `openai`, or `elevenlabs`) in `config/voice.yaml`.
 5. Build frontend and run `voice-console serve --config config/voice.yaml --targets config/targets.yaml`.
 6. Run the manual smoke checklist in `docs/manual-smoke-checklist.md`.
+
+For production investigation, use the content-safe structured event guide in
+[`docs/diagnostics.md`](docs/diagnostics.md).
 
 ## Verification commands
 

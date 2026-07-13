@@ -39,6 +39,10 @@ describe('console architecture seams', () => {
     connected: true,
     isCaptureSupported: true,
     loadError: undefined,
+    messages: [
+      { role: 'user', content: 'User message' },
+      { role: 'assistant', content: 'Agent response' },
+    ],
     newConversation: vi.fn(),
     response: 'Agent response',
     resolveApproval: vi.fn(),

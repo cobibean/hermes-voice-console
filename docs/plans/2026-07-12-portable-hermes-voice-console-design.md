@@ -17,7 +17,7 @@ OpenAI Realtime conversation mode is deferred. Version one uses a turn-based voi
 - Talk to a Hermes-powered agent from a rich laptop/desktop workspace and a simplified phone interface.
 - Preserve Hermes as the sole agent harness/runtime and source of context assembly, tool execution, memory integration, approvals, session persistence, and delegation behavior.
 - Use the supported Hermes API Server contract rather than source patches.
-- Support push-to-talk, transcript display, streamed run events, approvals, stopping, and TTS playback.
+- Support tap-to-record, persistent conversation display, streamed run events, approvals, stopping, and TTS playback.
 - Authenticate human users with Clerk.
 - Retain an optional machine credential for automated smoke tests and programmatic clients.
 - Run on the Hermes host or any other trusted host that can reach configured Hermes targets.
@@ -42,7 +42,7 @@ OpenAI Realtime conversation mode is deferred. Version one uses a turn-based voi
 3. The console authorizes the Clerk user against the deployment allowlist.
 4. The user selects an agent target and an owned conversation; the backend maps it to a Hermes transcript session and server-derived memory scope.
 5. The console probes the target and shows distinct console, voice-provider, and Hermes readiness.
-6. The user holds the microphone control, speaks, and releases it.
+6. The user taps Start recording, speaks, and taps Send recording.
 7. The console transcribes the completed utterance and automatically starts a Hermes run.
 8. The transcript, agent deltas, tool activity, and run state stream into the interface.
 9. Any approval request pauses for an explicit user decision.
@@ -68,7 +68,7 @@ The desktop command center provides:
 
 - persistent agent/profile, connection, conversation, configured-model, audio, and account status;
 - a target/conversation rail;
-- a central conversation workspace with text and expressive measured-level push-to-talk;
+- a central persistent conversation workspace with text and expressive measured-level tap-to-record;
 - a persistent run inspector with normalized tool cards, timeline, approvals, recovery, and diagnostics;
 - keyboard efficiency, resizable/collapsible information regions, and rich state-driven motion.
 
@@ -158,7 +158,7 @@ Local unit and fake E2E tests may inject a test authentication dependency. Any u
 1. Browser establishes an authenticated console connection.
 2. Console probes the selected Hermes target and required capabilities.
 3. Browser sends `recording.start`, then PCM audio frames.
-4. Browser sends `recording.stop` when push-to-talk is released.
+4. Browser stops capture first, then sends `recording.stop` after the user taps Send recording.
 5. Backend applies duration and size limits, then invokes the configured STT provider.
 6. Backend loads the owned conversation's persisted user/assistant dialogue when needed, emits the final transcript, and starts one Hermes run with explicit conversation history, transcript session identity, and stable memory scope.
 7. Hermes run events stream through the backend to the browser.
@@ -259,7 +259,7 @@ The Hermes API Server remains loopback-only. Only the Voice Console is exposed t
 ### Gate 3: real voice on the droplet
 
 - Real configured STT and selected TTS provider.
-- Desktop command-center push-to-talk, conversation, inspector, streamed run, response, and speech.
+- Desktop command-center tap-to-record, persistent conversation, inspector, streamed run, response, and speech.
 - Cancel-speech and stop-run separation.
 - Provider failure recovery and audio cleanup.
 

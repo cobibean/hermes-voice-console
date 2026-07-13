@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
+import logging
+import os
 
 import uvicorn
 
@@ -46,6 +49,14 @@ def main() -> None:
             static_dir=args.static_dir,
         )
         state = app.state.console_state
+        level_name = os.environ.get("VOICE_CONSOLE_LOG_LEVEL", "INFO").strip().upper()
+        level = getattr(logging, level_name, logging.INFO)
+        log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+        log_config["loggers"]["voice_console"] = {
+            "handlers": ["default"],
+            "level": logging.getLevelName(level),
+            "propagate": False,
+        }
         uvicorn.run(
             app,
             host=state.config.server.host,
@@ -53,6 +64,8 @@ def main() -> None:
             proxy_headers=True,
             forwarded_allow_ips="127.0.0.1",
             workers=1,
+            log_config=log_config,
+            log_level=logging.getLevelName(level).lower(),
         )
     elif args.cmd == "fake-target":
         uvicorn.run(create_fake_hermes_app(), host=args.host, port=args.port)

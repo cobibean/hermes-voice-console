@@ -50,7 +50,6 @@ export function ConsoleContent({
         onSpeakReplies={controller.setSpeakReplies}
         onStart={controller.startRecording}
         onStop={controller.stopRecording}
-        onDiscard={controller.discardRecording}
         onCancelSpeech={controller.cancelSpeech}
         inputLevel={controller.inputLevel}
         elapsed={controller.recordingElapsed}
@@ -60,7 +59,7 @@ export function ConsoleContent({
       />
 
       <div className="grid two console-workspace">
-        <TranscriptPanel transcript={controller.transcript} response={controller.response} />
+        <TranscriptPanel messages={controller.messages} response={controller.response} />
         {variant === 'desktop' ? <RunInspector controller={controller} /> : <ActivitySheet controller={controller} />}
       </div>
 

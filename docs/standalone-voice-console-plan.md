@@ -73,7 +73,7 @@ Implementation stance:
 1. Provide a browser voice console for talking to Hermes agents without patching Hermes source.
 2. Support multiple Hermes agent targets in one UI.
 3. Preserve Hermes as the only agent runtime: the console sends text into Hermes and receives Hermes output; it does not instantiate or fork agent logic internally.
-4. Provide high-quality push-to-talk UX: mic capture, transcript confirmation, agent response stream, assistant speech, cancel/stop, status indicators.
+4. Provide high-quality tap-to-record UX: mic capture, transcript confirmation, agent response stream, assistant speech, cancel/stop, status indicators.
 5. Use real STT/TTS providers through the console's own provider adapters and config.
 6. Ship with tests, fake target server, docs, and manual E2E smoke instructions.
 7. Make fleet rollout safe: config-only on Hermes side where possible, no source patches, explicit target registry, no secrets committed.
@@ -98,7 +98,7 @@ A standalone web app, initially served on `localhost`:
 1. User opens the voice console.
 2. User selects a target agent/profile from a configured target list.
 3. User selects or creates a voice session for that target.
-4. User presses and holds a mic button.
+4. User taps Start recording, speaks, and taps Send recording.
 5. Browser streams mic audio to the console backend.
 6. Backend transcribes audio and shows the transcript.
 7. Console sends transcript to the selected Hermes target.

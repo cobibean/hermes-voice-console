@@ -28,6 +28,16 @@ textarea { min-height: 86px; resize: vertical; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; }
 .toggle input { width: auto; }
 .transcript, .response { min-height: 76px; white-space: pre-wrap; background: #08101d; border-radius: 14px; padding: 14px; }
+.conversation-history { min-height: 360px; }
+.message-list { display: grid; gap: 14px; }
+.message { max-width: 86%; border-radius: 18px; padding: 13px 16px; background: #08101d; }
+.message p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.55; }
+.message strong { color: #8fc7ff; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; }
+.message.user { justify-self: end; background: #17345a; }
+.message.user strong { color: #b9dcff; }
+.message.assistant { justify-self: start; }
+.message.streaming { border: 1px solid #456386; }
+.empty-history { color: #93a8c2; }
 .timeline ol { margin: 0; padding-left: 20px; }
 .timeline li { margin: 8px 0; }
 code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff; }
@@ -58,7 +68,7 @@ code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff
 .mobile-activity .card { box-shadow: none; }
 .mobile-console > .controls { position: fixed; z-index: 4; right: max(18px, env(safe-area-inset-right)); bottom: calc(82px + env(safe-area-inset-bottom)); width: auto; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .mobile-console > .controls .mic { min-width: 68px; width: 68px; min-height: 68px; border-radius: 50%; font-size: 0; }
-.mobile-console > .controls .mic::after { content: 'Talk'; font-size: .84rem; }
+.mobile-console > .controls .mic::after { content: 'Record'; font-size: .84rem; }
 .mobile-console > .controls .mic.recording::after { content: 'Send'; }
 .mobile-console > .controls > :not(.mic) { display: none; }
 .mobile-console > .controls > .speech-fallback { display: block; position: fixed; left: max(14px, env(safe-area-inset-left)); right: 96px; bottom: calc(86px + env(safe-area-inset-bottom)); }

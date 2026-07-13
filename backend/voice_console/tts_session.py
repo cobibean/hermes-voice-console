@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .audio import OwnedAudioStore
 from .config import VoiceConfig
+from .diagnostics import diagnostic
 from .protocol import VoiceProtocolError, sanitize_provider_error
 from .providers import ProviderUnavailable, TtsProvider
 from .voice_filters import prepare_tts_sentences
@@ -46,12 +48,14 @@ class TtsSession:
         if self.task and not self.task.done():
             self.task.cancel()
         self.task = asyncio.create_task(self._synthesize_and_send(turn_id, text))
+        diagnostic(log, "tts.requested", turn_id=turn_id, input_chars=len(text), provider=self.provider.name)
 
     async def cancel(self, turn_id: str) -> None:
         self.recording_session.cancel(turn_id)
         if self.task and not self.task.done():
             self.task.cancel()
         await self.send_json({"type": "tts.cancelled", "turn_id": turn_id})
+        diagnostic(log, "tts.cancelled", turn_id=turn_id)
 
     def close(self) -> None:
         if self.task and not self.task.done():
@@ -67,12 +71,14 @@ class TtsSession:
         )
         if not sentences:
             return
+        diagnostic(log, "tts.prepared", turn_id=turn_id, sentence_chunks=len(sentences))
 
         try:
             for chunk_index, sentence in enumerate(sentences):
                 if self.recording_session.is_cancelled(turn_id):
                     return
                 audio_path = None
+                synthesis_started_at = time.monotonic()
                 try:
                     audio = await asyncio.wait_for(
                         self.provider.synthesize(
@@ -86,6 +92,17 @@ class TtsSession:
                     path = self.audio_store.validate_for_stream(
                         audio.path,
                         max_bytes=self.config.max_tts_audio_bytes,
+                    )
+                    diagnostic(
+                        log,
+                        "tts.chunk.synthesized",
+                        turn_id=turn_id,
+                        chunk_index=chunk_index,
+                        provider=audio.provider,
+                        mime=audio.mime,
+                        input_chars=len(sentence),
+                        audio_bytes=path.stat().st_size,
+                        latency_ms=round((time.monotonic() - synthesis_started_at) * 1000),
                     )
                     if self.recording_session.is_cancelled(turn_id):
                         return
@@ -120,16 +137,20 @@ class TtsSession:
                         )
             if not self.recording_session.is_cancelled(turn_id):
                 await self.send_json({"type": "tts.complete", "turn_id": turn_id})
+                diagnostic(log, "tts.completed", turn_id=turn_id, sentence_chunks=len(sentences))
         except asyncio.CancelledError:
             self.recording_session.cancel(turn_id)
             raise
         except TimeoutError:
+            diagnostic(log, "tts.failed", level=logging.WARNING, turn_id=turn_id, category="timeout")
             await self.send_error(VoiceProtocolError("tts_timeout", "Speech synthesis timed out; the text answer is still available"))
         except ProviderUnavailable as exc:
+            diagnostic(log, "tts.failed", level=logging.WARNING, turn_id=turn_id, category="provider_unavailable")
             await self.send_error(
                 VoiceProtocolError("tts_unavailable", sanitize_provider_error(str(exc)))
             )
         except VoiceProtocolError as exc:
+            diagnostic(log, "tts.failed", level=logging.WARNING, turn_id=turn_id, category=exc.code)
             await self.send_error(exc)
         except Exception:
             log.exception("unexpected TTS failure")

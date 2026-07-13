@@ -10,7 +10,6 @@ function renderControls(overrides: Partial<Parameters<typeof VoiceControls>[0]> 
     onSpeakReplies: vi.fn(),
     onStart: vi.fn(),
     onStop: vi.fn(),
-    onDiscard: vi.fn(),
     onCancelSpeech: vi.fn(),
     inputLevel: 0.4,
     elapsed: 1.2,
@@ -24,14 +23,18 @@ function renderControls(overrides: Partial<Parameters<typeof VoiceControls>[0]> 
 }
 
 describe('VoiceControls', () => {
-  it('discards rather than submits an interrupted pointer gesture', () => {
-    HTMLElement.prototype.setPointerCapture = vi.fn();
-    const props = renderControls();
-    const mic = screen.getByRole('button', { name: 'Release to send' });
-    fireEvent.pointerDown(mic, { pointerId: 7 });
-    fireEvent.pointerCancel(mic, { pointerId: 7 });
-    expect(props.onDiscard).toHaveBeenCalledOnce();
-    expect(props.onStop).not.toHaveBeenCalled();
+  it('uses one tap to start and a second tap to send', () => {
+    const idle = renderControls({ recording: 'idle' });
+    fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+    expect(idle.onStart).toHaveBeenCalledOnce();
+    expect(idle.onStop).not.toHaveBeenCalled();
+  });
+
+  it('sends the active recording on tap', () => {
+    const active = renderControls();
+    fireEvent.click(screen.getByRole('button', { name: 'Send recording' }));
+    expect(active.onStop).toHaveBeenCalledOnce();
+    expect(active.onStart).not.toHaveBeenCalled();
   });
 
   it('shows a visible user-gesture playback fallback', () => {

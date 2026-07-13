@@ -1,5 +1,6 @@
 import type { AuthTokenProvider } from './api';
 import type { AuthMode, VoiceServerEvent } from './types';
+import { voiceDiagnostic } from './diagnostics';
 
 export interface VoiceClientOptions {
   authMode: AuthMode;
@@ -44,6 +45,12 @@ export class VoiceClient {
     if (this.isOpen) return;
     const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${scheme}//${window.location.host}/ws/voice`;
+    voiceDiagnostic('socket.connect.requested', {
+      target: hello.target,
+      conversationId: hello.conversationId,
+      recovery: Boolean(hello.resumeRunId),
+      speakReplies: hello.speakReplies,
+    });
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
@@ -76,6 +83,7 @@ export class VoiceClient {
         }));
       };
       ws.addEventListener('open', () => {
+        voiceDiagnostic('socket.open');
         void this.options.getToken(false)
           .then((token) => ws.send(JSON.stringify({ type: 'auth', token })))
           .catch((error: unknown) => settleReject(error as Error));
@@ -85,6 +93,11 @@ export class VoiceClient {
         if (typeof ev.data === 'string') {
           try {
             const event = JSON.parse(ev.data) as VoiceServerEvent;
+            voiceDiagnostic('socket.event', {
+              type: event.type,
+              turnId: 'turn_id' in event ? event.turn_id : undefined,
+              runId: 'run_id' in event ? event.run_id : undefined,
+            }, event.type === 'agent.delta');
             if (event.type === 'auth.ok') {
               sendHello();
               return;
@@ -102,6 +115,7 @@ export class VoiceClient {
             this.options.onError?.('Received malformed voice event');
           }
         } else {
+          voiceDiagnostic('socket.audio', { bytes: (ev.data as ArrayBuffer).byteLength }, true);
           this.options.onAudio(ev.data as ArrayBuffer);
         }
       });
@@ -110,6 +124,7 @@ export class VoiceClient {
         this.rejectWaiters(new Error('voice websocket closed'));
         settleReject(new Error('voice websocket closed before ready'));
         this.options.onClose?.();
+        voiceDiagnostic('socket.closed');
       });
     });
   }
@@ -152,6 +167,11 @@ export class VoiceClient {
   sendJson(payload: Record<string, unknown>): void {
     if (!this.isOpen) throw new Error('voice websocket is not connected');
     this.ws!.send(JSON.stringify(payload));
+    voiceDiagnostic('socket.command', {
+      type: payload.type,
+      turnId: payload.turn_id,
+      runId: payload.run_id,
+    });
   }
 
   sendAudio(payload: ArrayBuffer): void {

@@ -159,7 +159,7 @@ Desktop is the primary rich experience:
 
 - A persistent command bar shows the selected agent/profile, connection state, current conversation, truthfully reported model information, audio state, and account controls.
 - A left rail contains target selection plus owned conversation creation, selection, and renaming.
-- The center workspace contains the conversation stream, streaming agent response, text composer, and an expressive push-to-talk surface driven by real microphone levels.
+- The center workspace contains the persistent conversation stream, streaming agent response, text composer, and an expressive tap-to-record surface driven by real microphone levels.
 - A persistent right inspector contains run state, normalized tool cards, event timeline, approval context/actions, recovery state, and diagnostics.
 - Real agent state drives useful motion and feedback: listening, transcribing, acceptance unknown, running, using a tool, waiting for approval, stopping, speaking, reconnecting, completed, cancelled, and failed.
 - Desktop adds keyboard efficiency, resizable/collapsible information regions, and hover detail, but no safety-critical action depends on hover or a shortcut.
@@ -172,7 +172,7 @@ Mobile preserves the complete safe workflow with lower information density:
 
 - A compact header shows agent/profile, connection, conversation, and current run state. Target and conversation selection live in a settings sheet.
 - Conversation and current response remain the main surface.
-- A safe-area-aware sticky composer contains a large push-to-talk control, text fallback, recording/speaking state, cancel-speech, and the current run lock.
+- A safe-area-aware sticky composer contains a large tap-to-record control, text fallback, recording/speaking state, cancel-speech, and the current run lock.
 - Tool/run activity is summarized inline; full activity opens in a bottom sheet.
 - Approval uses a focused full-screen dialog or sheet with understandable context and least-destructive action visible without raw JSON.
 - Stop run remains explicit while active and is visually separated from release-to-send and cancel-speech.
@@ -392,7 +392,7 @@ Keep event payloads, transcript text, assistant text, and approval details in bo
 - Replayed recovery events restore text but do not replay old audio.
 - Cancel speech clears current and queued TTS only. Stop run is a separate Hermes action.
 - Drive the recording visualization from measured microphone input levels; do not ship a decorative fake waveform. Show elapsed time and the configured maximum.
-- Push-to-talk uses Pointer Events with `setPointerCapture()`. `pointerup` completes the utterance; `pointercancel`, page hide during recording, or explicit cancel discards it through a real `recording.cancel` protocol action. `pointerleave` is not the release mechanism.
+- Recording is a two-tap toggle in both shells: Start recording, then Send recording. Native button semantics provide mouse, touch, Enter, and Space operation. Page hide during an unsubmitted recording or explicit cancel discards it through a real `recording.cancel` protocol action.
 - Provide a keyboard-operable equivalent and visible focus without making a global single-character shortcut fire while typing.
 - Unlock browser audio playback during a user gesture and provide a visible play fallback when autoplay policy still blocks speech.
 - On `visibilitychange` and `pageshow`, re-evaluate Clerk expiry, socket state, recording state, and active-run recovery. A frozen mobile tab may lose its socket without stopping the backend-owned run.
@@ -569,14 +569,14 @@ First move existing behavior with no product change. Then implement against thes
 - Add STT hallucination/empty-audio filtering.
 - Propagate TTS MIME type and `(turn_id, chunk_index)` through playback.
 - Add sequential sentence-level synthesis, markdown/think stripping, caps, timeouts, cancel, stale-chunk rejection, and no audio replay on recovery.
-- Add a measured input-level visualization, elapsed/max recording time, pointer capture, discard-on-`pointercancel`, keyboard operation, and audio-playback unlock/fallback.
+- Add a measured input-level visualization, elapsed/max recording time, two-tap recording controls, native keyboard operation, and audio-playback unlock/fallback.
 - Make the mobile composer safe-area aware with dynamic viewport units; verify the virtual keyboard does not cover text or critical controls.
 - Add `visibilitychange`/`pageshow` recovery, forced-colors styles, visible focus, reduced-motion variants, and throttled semantic state announcements.
 - Ensure no critical desktop action or explanation is hover-only.
 - Add the visible AI-voice disclosure.
 - Keep a TTS failure non-fatal: text remains complete and usable.
 
-**Gate:** real OpenAI transcription and selected TTS pass in both shells; cancel speech does not stop the agent run, stopping the run does not erase text, and interrupted recording gestures do not submit audio.
+**Gate:** real OpenAI transcription and selected TTS pass in both shells; conversation history reloads; cancel speech does not stop the agent run; stopping the run does not erase text; and backgrounded or explicitly discarded recordings do not submit audio.
 
 ### Phase 9 — Phone, reconnection, and browser-level proof
 
@@ -584,9 +584,9 @@ First move existing behavior with no product change. Then implement against thes
 - Test 1440×900 and 1280×800 desktop command-center layouts with the persistent inspector.
 - Test 1024×768 compact desktop with the inspector drawer.
 - Test 390×844 phone portrait and 844×390 coarse-pointer phone landscape with the simplified shell.
-- Verify secure-context microphone behavior, permission denial, push-to-talk, typed fallback, transcript, response, tool timeline, approval, stop, cancel speech, and AI disclosure.
+- Verify secure-context microphone behavior, permission denial, tap-to-record, typed fallback, persistent conversation history, response, tool timeline, approval, stop, cancel speech, and AI disclosure.
 - Test desktop keyboard-only operation, visible focus, reduced motion, forced colors, and screen-reader state announcements.
-- Test mobile virtual-keyboard/safe-area behavior, `pointercancel`, rotation, and backgrounding during an unsubmitted recording.
+- Test mobile virtual-keyboard/safe-area behavior, rotation, and backgrounding during an unsubmitted recording.
 - Sleep/close the phone during an accepted harmless run and verify recovery without duplicate run creation.
 - Test browser disconnect before `agent.run.started`, console-to-Hermes SSE failure, and console-process restart reconciliation.
 - Test approvals in desktop and mobile presentations with long details, least-destructive focus, containment, Escape policy, and logical focus return.

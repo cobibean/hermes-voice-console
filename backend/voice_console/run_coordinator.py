@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import TargetConfig, TargetsConfig
+from .diagnostics import diagnostic
 from .hermes_client import (
     ApiRunsTransport,
     HermesAmbiguousSubmission,
@@ -69,6 +70,14 @@ class RunCoordinator:
         turn_id: str,
         text: str,
     ) -> tuple[RunRecord, asyncio.Queue[dict[str, Any] | None]]:
+        diagnostic(
+            log,
+            "coordinator.start",
+            target=target.name,
+            conversation_id=session.conversation_id,
+            turn_id=turn_id,
+            input_chars=len(text),
+        )
         lock = self._locks.setdefault((target.name, session.conversation_id), asyncio.Lock())
         async with lock:
             uncertainty_fence = self.store.acceptance_unknown_for_owner_target(
@@ -110,6 +119,16 @@ class RunCoordinator:
                     text=text,
                     conversation_history=history,
                 )
+                diagnostic(
+                    log,
+                    "coordinator.hermes.accepted",
+                    target=target.name,
+                    conversation_id=session.conversation_id,
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    history_messages=len(history),
+                    history_attempts=attempt + 1,
+                )
             except HermesAmbiguousSubmission as exc:
                 self.store.update_run(
                     local_turn_id,
@@ -150,6 +169,14 @@ class RunCoordinator:
                 event["turn_id"] = active.record.turn_id
                 await self._emit(active, event)
                 if event.get("type") in {"agent.completed", "agent.failed", "agent.stopped"}:
+                    diagnostic(
+                        log,
+                        "coordinator.terminal",
+                        run_id=active.record.run_id,
+                        turn_id=active.record.turn_id,
+                        terminal_event=event.get("type"),
+                        sequence=active.record.last_sequence,
+                    )
                     return
             if active.record.status not in TERMINAL_STATUSES:
                 await self._reconcile(active)
@@ -160,6 +187,13 @@ class RunCoordinator:
                 "Hermes event stream lost run=%s owner=%s",
                 active.record.run_id,
                 active.record.owner_key[:10],
+            )
+            diagnostic(
+                log,
+                "coordinator.reconcile.started",
+                level=logging.WARNING,
+                run_id=active.record.run_id,
+                turn_id=active.record.turn_id,
             )
             await self._reconcile(active)
 

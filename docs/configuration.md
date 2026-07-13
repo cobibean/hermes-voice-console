@@ -60,6 +60,7 @@ Provider/model labels are optional operator-configured descriptions, not proof o
 STT providers are `fake`, `openai`, `groq`, and optional local `faster_whisper`. TTS providers are `fake`, `edge`, `openai`, and `elevenlabs`. Provider credentials stay in the console service environment.
 
 OpenAI STT defaults to `gpt-4o-mini-transcribe`; OpenAI TTS defaults to `gpt-4o-mini-tts`. Both can be overridden in `voice.yaml`, including `whisper-1` or `tts-1` for fallback/comparison.
+Set `openai_stt_language` to an ISO-639-1 code such as `en` when a deployment has a known primary language; leave it empty for automatic detection.
 
 ## Safety bounds
 

@@ -28,5 +28,6 @@ voice:
   tts_sentence_max_chars: 420
   tts_chunk_timeout_seconds: 45
   openai_stt_model: "gpt-4o-mini-transcribe"
+  openai_stt_language: ""       # optional ISO-639-1 hint, for example "en"
   speak_replies_default: false
   retain_audio_debug: false

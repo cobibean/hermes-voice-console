@@ -9,6 +9,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from .auth import AuthFailure
 from .config import ConfigError, TargetConfig
+from .diagnostics import diagnostic
 from .hermes_client import ApiRunsTransport, HermesApiClient, HermesApiError
 from .protocol import (
     ALLOWED_APPROVAL_DECISIONS,
@@ -55,7 +56,10 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
     auth_context = await state.auth.authenticate_ws(ws)
     if auth_context is None:
         return
-    log.info("voice socket authenticated principal=%s", auth_context.audit_subject)
+    socket_started_at = time.monotonic()
+    audio_chunks = 0
+    audio_bytes = 0
+    diagnostic(log, "socket.authenticated", principal=auth_context.audit_subject)
 
     send_lock = asyncio.Lock()
     recording_session = RecordingSession(state.config.voice)
@@ -141,6 +145,14 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
     async def begin_run(turn_id: str, text: str) -> None:
         nonlocal subscription_task, subscription_queue, subscribed_run_id
         assert target is not None and session is not None
+        diagnostic(
+            log,
+            "run.submit.requested",
+            turn_id=turn_id,
+            conversation_id=session.conversation_id,
+            target=target.name,
+            input_chars=len(text),
+        )
         try:
             record, queue = await state.runs.start(
                 target=target,
@@ -149,6 +161,7 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                 text=text,
             )
             assert record.run_id
+            diagnostic(log, "run.submit.accepted", turn_id=turn_id, run_id=record.run_id)
             subscription_queue = queue
             subscribed_run_id = record.run_id
             subscription_task = asyncio.create_task(
@@ -174,6 +187,7 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
     async def recording_timeout(turn_id: str) -> None:
         await asyncio.sleep(state.config.voice.max_recording_wall_seconds)
         if recording_session.expire_if_active(turn_id):
+            diagnostic(log, "recording.timeout", level=logging.WARNING, turn_id=turn_id)
             await send_error(
                 VoiceProtocolError(
                     "recording_timeout",
@@ -186,7 +200,16 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
         if recording_timeout_task and not recording_timeout_task.done():
             recording_timeout_task.cancel()
         active_turn, pcm = recording_session.stop_recording(turn_id)
+        diagnostic(
+            log,
+            "recording.stopped",
+            turn_id=active_turn,
+            pcm_bytes=len(pcm),
+            audio_chunks=audio_chunks,
+            duration_ms=round(len(pcm) / (state.config.voice.sample_rate * 2) * 1000),
+        )
         await send_json({"type": "recording.stopped", "turn_id": active_turn})
+        stt_started_at = time.monotonic()
         try:
             validate_spoken_audio(pcm, state.config.voice)
             transcript = await state.stt.transcribe(
@@ -211,6 +234,15 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
             filter_transcript(transcript.text),
             max_chars=state.config.voice.max_input_text_chars,
         )
+        diagnostic(
+            log,
+            "stt.completed",
+            turn_id=active_turn,
+            provider=transcript.provider,
+            model=state.config.voice.openai_stt_model if transcript.provider == "openai" else None,
+            latency_ms=round((time.monotonic() - stt_started_at) * 1000),
+            transcript_chars=len(text),
+        )
         await send_json(
             {
                 "type": "transcript.final",
@@ -233,6 +265,17 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                     )
                     continue
                 try:
+                    audio_chunks += 1
+                    audio_bytes += len(frame["bytes"])
+                    if audio_chunks % 25 == 0:
+                        diagnostic(
+                            log,
+                            "recording.audio.progress",
+                            level=logging.DEBUG,
+                            turn_id=recording_session.turn_id,
+                            audio_chunks=audio_chunks,
+                            pcm_bytes=audio_bytes,
+                        )
                     recording_session.add_audio(frame["bytes"])
                 except VoiceProtocolError as exc:
                     await send_error(exc)
@@ -359,6 +402,16 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                                 allow_tts=False,
                             )
                         )
+                    diagnostic(
+                        log,
+                        "socket.ready",
+                        target=target.name,
+                        conversation_id=session.conversation_id,
+                        stt_provider=state.stt.name,
+                        tts_provider=state.tts.name,
+                        speak_replies=speak_replies,
+                        resumed=bool(resume_run_id),
+                    )
                     continue
 
                 if not hello_received or target is None or session is None:
@@ -374,11 +427,14 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                             f"conversation is locked by {active.status}",
                         )
                     turn_id = validate_turn_id(message.get("turn_id"), required=True)
+                    audio_chunks = 0
+                    audio_bytes = 0
                     recording_session.start_recording(turn_id)
                     if recording_timeout_task and not recording_timeout_task.done():
                         recording_timeout_task.cancel()
                     recording_timeout_task = asyncio.create_task(recording_timeout(turn_id))
                     await send_json({"type": "recording.started", "turn_id": turn_id})
+                    diagnostic(log, "recording.started", turn_id=turn_id)
                 elif message_type == "recording.stop":
                     turn_id = validate_turn_id(message.get("turn_id"), required=True)
                     await finish_recording(turn_id)
@@ -386,8 +442,15 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
                     turn_id = validate_turn_id(message.get("turn_id"), required=True)
                     if recording_timeout_task and not recording_timeout_task.done():
                         recording_timeout_task.cancel()
-                    recording_session.discard_recording(turn_id)
+                    discarded = recording_session.discard_recording(turn_id)
                     await send_json({"type": "recording.discarded", "turn_id": turn_id})
+                    diagnostic(
+                        log,
+                        "recording.discarded",
+                        turn_id=turn_id,
+                        discarded=discarded,
+                        pcm_bytes=audio_bytes,
+                    )
                 elif message_type == "text.submit":
                     active = state.store.active_run_for_conversation(
                         session.conversation_id, owner_key=owner_key
@@ -474,3 +537,10 @@ async def handle_voice_socket(ws: WebSocket, state: ConsoleState) -> None:
             if task and not task.done():
                 task.cancel()
         tts_session.close()
+        diagnostic(
+            log,
+            "socket.closed",
+            principal=auth_context.audit_subject,
+            lifetime_ms=round((time.monotonic() - socket_started_at) * 1000),
+            subscribed_run_id=subscribed_run_id,
+        )

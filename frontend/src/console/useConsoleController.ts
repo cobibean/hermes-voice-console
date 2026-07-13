@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { PendingApproval } from '../components/ApprovalModal';
-import { createSession, listSessions, type AuthTokenProvider } from '../lib/api';
+import { createSession, listSessions, loadSessionMessages, type AuthTokenProvider } from '../lib/api';
 import { browserSupportsCapture, startPcm16Capture, type CaptureSession } from '../lib/capture';
 import { PlaybackQueue } from '../lib/playback';
 import { clearRecovery, loadRecovery, saveRecovery } from '../lib/recovery';
 import { consoleReducer, initialConsoleState, nextTurnId } from '../lib/state';
-import type { AuthMode, Bootstrap, SessionInfo, TimelineItem, VoiceServerEvent } from '../lib/types';
+import type { AuthMode, Bootstrap, ConversationMessage, SessionInfo, TimelineItem, VoiceServerEvent } from '../lib/types';
 import { VoiceClient } from '../lib/voiceClient';
 import { deriveConsoleViewState } from './viewState';
+import { voiceDiagnostic } from '../lib/diagnostics';
 
 type ApprovalDecision = 'once' | 'session' | 'always' | 'deny';
 
@@ -58,6 +59,7 @@ export interface ConsoleController {
   isCaptureSupported: boolean;
   loadError?: string;
   response: string;
+  messages: ConversationMessage[];
   inputLevel: number;
   recordingElapsed: number;
   speechFallbackAvailable: boolean;
@@ -103,6 +105,7 @@ export function useConsoleController({
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
+  const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [textDraft, setTextDraft] = useState('');
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [acceptanceUnknown, setAcceptanceUnknown] = useState<{
@@ -127,7 +130,7 @@ export function useConsoleController({
   const activeRunIdRef = useRef<string | null>(null);
   const activeTurnIdRef = useRef<string | null>(null);
   const lastSequenceRef = useRef(0);
-  const pendingTextTurnRef = useRef<string | null>(null);
+  const pendingTextTurnRef = useRef<{ turnId: string; text: string } | null>(null);
 
   const closeClient = useCallback(() => {
     clientRef.current?.close();
@@ -177,6 +180,28 @@ export function useConsoleController({
     };
   }, [getToken, selectedTarget]);
 
+  useEffect(() => {
+    let active = true;
+    setMessages([]);
+    setResponse('');
+    setTranscript('');
+    if (!selectedTarget || !sessionKey) return undefined;
+    void loadSessionMessages(sessionKey, selectedTarget, getToken)
+      .then((history) => {
+        if (!active) return;
+        setMessages(history);
+        voiceDiagnostic('history.loaded', {
+          target: selectedTarget,
+          conversationId: sessionKey,
+          messages: history.length,
+        });
+        const lastUser = [...history].reverse().find((message) => message.role === 'user');
+        setTranscript(lastUser?.content ?? '');
+      })
+      .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
+    return () => { active = false; };
+  }, [getToken, selectedTarget, sessionKey]);
+
   const appendEvent = useCallback((event: VoiceServerEvent) => {
     setTimeline((items) => [
       ...items,
@@ -202,7 +227,15 @@ export function useConsoleController({
     dispatch({ type: 'event', event });
     if (event.type === 'ready') setConnected(true);
     if (event.type === 'recording.started') activeTurnIdRef.current = event.turn_id;
-    if (event.type === 'transcript.final') setTranscript(event.text);
+    if (event.type === 'transcript.final') {
+      setTranscript(event.text);
+      setMessages((current) => [...current, { role: 'user', content: event.text }]);
+      setResponse('');
+    }
+    if (event.type === 'text.accepted' && pendingTextTurnRef.current?.turnId === event.turn_id) {
+      setMessages((current) => [...current, { role: 'user', content: pendingTextTurnRef.current!.text }]);
+      setResponse('');
+    }
     if (event.type === 'agent.run.started') {
       activeRunIdRef.current = event.run_id;
       lastSequenceRef.current = 'sequence' in event && typeof event.sequence === 'number' ? event.sequence : 0;
@@ -214,13 +247,16 @@ export function useConsoleController({
       });
       setResponse('');
       setApproval(null);
-      if (pendingTextTurnRef.current === event.turn_id) {
+      if (pendingTextTurnRef.current?.turnId === event.turn_id) {
         setTextDraft('');
         pendingTextTurnRef.current = null;
       }
     }
     if (event.type === 'agent.delta') setResponse((previous) => previous + event.delta);
-    if (event.type === 'agent.completed') setResponse(event.text);
+    if (event.type === 'agent.completed') {
+      setMessages((current) => [...current, { role: 'assistant', content: event.text }]);
+      setResponse('');
+    }
     if (event.type === 'agent.approval.request') {
       setApproval({
         runId: event.run_id,
@@ -310,18 +346,18 @@ export function useConsoleController({
         dispatch({ type: 'recording.discard' });
         return;
       }
-      if (stopRequestedRef.current) {
-        client.stopRecording(turnId);
-        dispatch({ type: 'recording.stop' });
-        return;
-      }
       const capture = await startPcm16Capture((chunk) => client.sendAudio(chunk), setInputLevel);
       captureRef.current = capture;
-      if (stopRequestedRef.current) {
-        client.stopRecording(turnId);
-        dispatch({ type: 'recording.stop' });
+      if (discardRequestedRef.current) {
         await capture.stop();
         captureRef.current = null;
+        if (client.isOpen) client.cancelRecording(turnId);
+        dispatch({ type: 'recording.discard' });
+      } else if (stopRequestedRef.current) {
+        await capture.stop();
+        captureRef.current = null;
+        if (client.isOpen) client.stopRecording(turnId);
+        dispatch({ type: 'recording.stop' });
       }
     } catch (error) {
       dispatch({ type: 'error', message: (error as Error).message });
@@ -335,7 +371,7 @@ export function useConsoleController({
     if (!text) return;
     const turnId = nextTurnId();
     activeTurnIdRef.current = turnId;
-    pendingTextTurnRef.current = turnId;
+    pendingTextTurnRef.current = { turnId, text };
     try {
       const client = await connect();
       client.sendText(turnId, text);
@@ -347,15 +383,15 @@ export function useConsoleController({
 
   const stopRecording = useCallback(() => {
     const turnId = activeTurnIdRef.current ?? state.activeTurnId;
-    if (state.recording === 'connecting') {
-      stopRequestedRef.current = true;
-      return;
-    }
     if (!turnId || state.recording === 'idle') return;
+    stopRequestedRef.current = true;
     dispatch({ type: 'recording.stop' });
-    clientRef.current?.stopRecording(turnId);
-    void captureRef.current?.stop();
+    const capture = captureRef.current;
     captureRef.current = null;
+    if (!capture) return;
+    void capture.stop().finally(() => {
+      if (clientRef.current?.isOpen) clientRef.current.stopRecording(turnId);
+    });
   }, [state.activeTurnId, state.recording]);
 
   const discardRecording = useCallback(() => {
@@ -363,10 +399,13 @@ export function useConsoleController({
     discardRequestedRef.current = true;
     stopRequestedRef.current = false;
     dispatch({ type: 'recording.discard' });
-    void captureRef.current?.stop();
+    const capture = captureRef.current;
     captureRef.current = null;
     setInputLevel(0);
-    if (turnId && clientRef.current?.isOpen) clientRef.current.cancelRecording(turnId);
+    void capture?.stop().finally(() => {
+      if (turnId && clientRef.current?.isOpen) clientRef.current.cancelRecording(turnId);
+    });
+    if (!capture && turnId && clientRef.current?.isOpen) clientRef.current.cancelRecording(turnId);
   }, [state.activeTurnId]);
 
   useEffect(() => {
@@ -459,6 +498,7 @@ export function useConsoleController({
     inputLevel,
     isCaptureSupported: browserSupportsCapture(),
     loadError,
+    messages,
     newConversation,
     response,
     recordingElapsed,
@@ -494,6 +534,7 @@ export function useConsoleController({
     discardRecording,
     inputLevel,
     loadError,
+    messages,
     newConversation,
     response,
     recordingElapsed,

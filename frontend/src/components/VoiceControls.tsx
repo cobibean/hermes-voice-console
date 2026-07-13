@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import type { RecordingState } from '../lib/state';
 
 export function VoiceControls({
@@ -8,7 +7,6 @@ export function VoiceControls({
   onSpeakReplies,
   onStart,
   onStop,
-  onDiscard,
   onCancelSpeech,
   inputLevel,
   elapsed,
@@ -22,7 +20,6 @@ export function VoiceControls({
   onSpeakReplies: (value: boolean) => void;
   onStart: () => void;
   onStop: () => void;
-  onDiscard: () => void;
   onCancelSpeech: () => void;
   inputLevel: number;
   elapsed: number;
@@ -30,7 +27,6 @@ export function VoiceControls({
   speechFallbackAvailable: boolean;
   onRetrySpeech: () => void;
 }) {
-  const activePointer = useRef<number | null>(null);
   const isRecording = recording === 'recording';
   const busy = recording === 'connecting' || recording === 'transcribing';
   return (
@@ -38,34 +34,9 @@ export function VoiceControls({
       <button
         className={isRecording ? 'mic recording' : 'mic'}
         disabled={!supported || busy}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          activePointer.current = event.pointerId;
-          if (!isRecording) onStart();
-        }}
-        onPointerUp={(event) => {
-          if (activePointer.current !== event.pointerId) return;
-          activePointer.current = null;
-          onStop();
-        }}
-        onPointerCancel={(event) => {
-          if (activePointer.current !== event.pointerId) return;
-          activePointer.current = null;
-          onDiscard();
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          event.preventDefault();
-          if (!event.repeat && !isRecording) onStart();
-        }}
-        onKeyUp={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onStop();
-          }
-        }}
+        onClick={isRecording ? onStop : onStart}
       >
-        {isRecording ? 'Release to send' : busy ? 'Working…' : 'Hold to talk'}
+        {isRecording ? 'Send recording' : busy ? 'Working…' : 'Start recording'}
       </button>
       <div className="input-meter" aria-hidden="true"><span style={{ transform: `scaleX(${inputLevel})` }} /></div>
       <output className="recording-time" aria-label="Recording time">
