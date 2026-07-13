@@ -8,6 +8,7 @@ vi.mock('@clerk/react', () => ({
   Show: ({ when, children }: { when: string; children: ReactNode }) =>
     when === 'signed-out' ? children : null,
   SignInButton: ({ children }: { children: ReactNode }) => children,
+  SignUpButton: ({ children }: { children: ReactNode }) => children,
   UserButton: () => <button>Account</button>,
   useAuth: () => ({ getToken: vi.fn(async () => 'clerk-token') }),
 }));
@@ -76,5 +77,6 @@ describe('App authentication modes', () => {
     })));
     render(<App />);
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
   });
 });

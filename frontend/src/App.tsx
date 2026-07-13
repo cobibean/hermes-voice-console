@@ -1,4 +1,11 @@
-import { ClerkProvider, Show, SignInButton, UserButton, useAuth } from '@clerk/react';
+import {
+  ClerkProvider,
+  Show,
+  SignInButton,
+  SignUpButton,
+  UserButton,
+  useAuth,
+} from '@clerk/react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { DesktopConsole } from './console/DesktopConsole';
 import { MobileConsole } from './console/MobileConsole';
@@ -94,9 +101,14 @@ function ClerkConsole({ publicConfig }: { publicConfig: PublicConfig }) {
       <Show when="signed-out">
         <StatusScreen title="Hermes Voice Console">
           <p>Sign in to talk with your authorized Hermes agents.</p>
-          <SignInButton mode="modal">
-            <button>Sign in</button>
-          </SignInButton>
+          <div className="button-row">
+            <SignInButton mode="modal">
+              <button>Sign in</button>
+            </SignInButton>
+            <SignUpButton mode="modal">
+              <button className="secondary">Create account</button>
+            </SignUpButton>
+          </div>
         </StatusScreen>
       </Show>
       <Show when="signed-in">
