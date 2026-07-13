@@ -24,7 +24,7 @@ This repository is intentionally separate from `NousResearch/hermes-agent` and f
 - Operator docs under `docs/`.
 - `.agent` goal ledger for this implementation.
 
-For the Mac mini / phone / laptop rollout path, see `docs/remote-rollout-next-steps.md`.
+The current product and deployment source of truth is the [V1 implementation plan](docs/plans/2026-07-12-portable-hermes-voice-console-v1-implementation-plan.md). The older remote-rollout note is retained only as superseded history.
 
 ## Quickstart: deterministic fake E2E
 
