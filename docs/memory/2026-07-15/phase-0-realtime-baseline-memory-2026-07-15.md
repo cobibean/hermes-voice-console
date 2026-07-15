@@ -11,6 +11,7 @@ Lock clean Voice Console and Hermes evidence before implementing the GPT-Realtim
 - Voice Console branch: `codex/gpt-realtime-hermes-runtime`
 - Plan commit: `1dbc511`
 - Upstream research base: `00a36831d214488f901df7de71efde02a8072aa4`
+- Upstream implementation base: `0c1adb4877f344af8276d5277871e8056cef3ad5`
 
 ## Verified baseline
 

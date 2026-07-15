@@ -12,6 +12,7 @@ models:
 
 hermes:
   research_base_commit: 00a36831d214488f901df7de71efde02a8072aa4
+  implementation_base_commit: 0c1adb4877f344af8276d5277871e8056cef3ad5
   minimum_tested_commit: null
   production_pinned_commit: null
 
