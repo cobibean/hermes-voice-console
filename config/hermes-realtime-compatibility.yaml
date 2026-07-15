@@ -1,0 +1,23 @@
+schema_version: 1
+status: feasibility_in_progress
+enabled: false
+
+contract:
+  name: hermes.realtime
+  required_major: 1
+
+models:
+  realtime: gpt-realtime-2.1
+  lead_worker: gpt-5.6-sol
+
+hermes:
+  research_base_commit: 00a36831d214488f901df7de71efde02a8072aa4
+  minimum_tested_commit: null
+  production_pinned_commit: null
+
+evidence:
+  fake_contract_verified: false
+  live_realtime_verified: false
+  live_delegation_verified: false
+  desktop_verified: false
+  mobile_verified: false
