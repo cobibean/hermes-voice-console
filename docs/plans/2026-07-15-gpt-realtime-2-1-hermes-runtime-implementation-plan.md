@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-15
 
-**Status:** Ready for owner review
+**Status:** Implementation in progress — Phase 1 feasibility gate
 
 **Source of truth:** `docs/plans/2026-07-15-gpt-realtime-2-1-hermes-runtime-design.md`
 
