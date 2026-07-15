@@ -1,5 +1,5 @@
 schema_version: 1
-status: feasibility_in_progress
+status: phase_1_proof_verified
 enabled: false
 
 contract:
@@ -13,12 +13,12 @@ models:
 hermes:
   research_base_commit: 00a36831d214488f901df7de71efde02a8072aa4
   implementation_base_commit: 0c1adb4877f344af8276d5277871e8056cef3ad5
-  minimum_tested_commit: null
+  minimum_tested_commit: cadd93e6a0cddbd29c9b66abe85c862eeb4e4ffa
   production_pinned_commit: null
 
 evidence:
-  fake_contract_verified: false
-  live_realtime_verified: false
-  live_delegation_verified: false
+  fake_contract_verified: true
+  live_realtime_verified: true
+  live_delegation_verified: true
   desktop_verified: false
   mobile_verified: false
