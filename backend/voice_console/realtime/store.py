@@ -48,12 +48,18 @@ class RealtimeMappingStore:
                     operation TEXT NOT NULL,
                     fingerprint TEXT NOT NULL,
                     state TEXT NOT NULL,
+                    response_json TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
                     PRIMARY KEY(owner_key, target_name, scope_id, request_id)
                 );
                 """
             )
+            columns = {
+                row["name"] for row in self._db.execute("PRAGMA table_info(realtime_requests)")
+            }
+            if "response_json" not in columns:
+                self._db.execute("ALTER TABLE realtime_requests ADD COLUMN response_json TEXT")
             cutoff = time.time() - 30 * 86400
             self._db.execute(
                 "DELETE FROM realtime_requests WHERE updated_at < ?", (cutoff,)
@@ -75,6 +81,17 @@ class RealtimeMappingStore:
         ).hexdigest()
         now = time.time()
         with self._lock, self._db:
+            reused = self._db.execute(
+                """SELECT scope_id,operation,fingerprint,state FROM realtime_requests
+                   WHERE owner_key=? AND target_name=? AND request_id=?""",
+                (owner_key, target_name, request_id),
+            ).fetchone()
+            if reused is not None and reused["scope_id"] != scope_id:
+                raise RealtimeProxyError(
+                    "idempotency_conflict",
+                    "The request ID was already used for another resource",
+                    status=409,
+                )
             row = self._db.execute(
                 """SELECT operation,fingerprint,state FROM realtime_requests
                    WHERE owner_key=? AND target_name=? AND scope_id=? AND request_id=?""",
@@ -97,18 +114,86 @@ class RealtimeMappingStore:
         return "new"
 
     def complete_request(self, *, owner_key: str, target_name: str, scope_id: str,
-                         request_id: str) -> None:
+                         request_id: str, response: Mapping[str, Any] | None = None) -> None:
+        self.set_request_state(
+            owner_key=owner_key,
+            target_name=target_name,
+            scope_id=scope_id,
+            request_id=request_id,
+            state="complete",
+            response=response,
+        )
+
+    def set_request_state(self, *, owner_key: str, target_name: str, scope_id: str,
+                          request_id: str, state: str,
+                          response: Mapping[str, Any] | None = None) -> None:
+        if state not in {"pending", "in_progress", "outcome_unknown", "complete"}:
+            raise ValueError("invalid Realtime request state")
         with self._lock, self._db:
             self._db.execute(
-                """UPDATE realtime_requests SET state='complete',updated_at=?
+                """UPDATE realtime_requests SET state=?,response_json=?,updated_at=?
                    WHERE owner_key=? AND target_name=? AND scope_id=? AND request_id=?""",
-                (time.time(), owner_key, target_name, scope_id, request_id),
+                (
+                    state,
+                    json.dumps(response, sort_keys=True, separators=(",", ":"))
+                    if response is not None
+                    else None,
+                    time.time(),
+                    owner_key,
+                    target_name,
+                    scope_id,
+                    request_id,
+                ),
             )
+
+    def request_response(self, *, owner_key: str, target_name: str, scope_id: str,
+                         request_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                """SELECT response_json FROM realtime_requests
+                   WHERE owner_key=? AND target_name=? AND scope_id=? AND request_id=?""",
+                (owner_key, target_name, scope_id, request_id),
+            ).fetchone()
+        if row is None or not row["response_json"]:
+            return None
+        value = json.loads(row["response_json"])
+        return value if isinstance(value, dict) else None
 
     def record_session(self, document: Mapping[str, Any], *, owner_key: str,
                        target_name: str, request_id: str) -> None:
         now = time.time()
         with self._lock, self._db:
+            existing_session = self._db.execute(
+                "SELECT * FROM realtime_sessions WHERE realtime_session_id=?",
+                (document["realtime_session_id"],),
+            ).fetchone()
+            expected = (
+                document["conversation_id"], target_name, owner_key, request_id
+            )
+            if existing_session is not None and (
+                existing_session["conversation_id"],
+                existing_session["target_name"],
+                existing_session["owner_key"],
+                existing_session["create_request_id"],
+            ) != expected:
+                raise RealtimeProxyError(
+                    "target_identity_mismatch",
+                    "Hermes returned a session identifier owned by another request",
+                )
+            existing_request = self._db.execute(
+                """SELECT realtime_session_id FROM realtime_sessions
+                   WHERE owner_key=? AND target_name=? AND conversation_id=?
+                     AND create_request_id=?""",
+                (owner_key, target_name, document["conversation_id"], request_id),
+            ).fetchone()
+            if (
+                existing_request is not None
+                and existing_request["realtime_session_id"] != document["realtime_session_id"]
+            ):
+                raise RealtimeProxyError(
+                    "target_identity_mismatch",
+                    "Hermes returned a different session for the same request",
+                )
             self._db.execute(
                 """INSERT INTO realtime_sessions
                    (realtime_session_id,conversation_id,target_name,owner_key,create_request_id,

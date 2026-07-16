@@ -35,6 +35,20 @@ def create_fake_hermes_app() -> FastAPI:
     def overridden(name: str, document: dict[str, Any]) -> dict[str, Any]:
         return {**document, **(app.state.realtime_overrides.get(name) or {})}
 
+    def unknown_result(
+        conversation_id: str, request_id: str, operation: str
+    ) -> dict[str, Any] | None:
+        if not request_id.startswith("unknown_"):
+            return None
+        result = {
+            "client_request_id": request_id,
+            "operation": operation,
+            "state": "outcome_unknown",
+            "accepted": False,
+        }
+        app.state.realtime_requests[(conversation_id, request_id)] = result
+        return result
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {"status": "ok", "platform": "fake-hermes", "version": "test"}
@@ -109,6 +123,7 @@ def create_fake_hermes_app() -> FastAPI:
                 "realtime_session_events": {"method": "GET", "path": "/v1/realtime/sessions/{session_id}/events"},
                 "realtime_approval": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/approvals/{approval_id}"},
                 "realtime_conversation": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}"},
+                "realtime_request_result": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/requests/{client_request_id}"},
                 "realtime_worker_jobs": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs"},
                 "realtime_worker_job": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}"},
                 "realtime_worker_job_events": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/events"},
@@ -125,7 +140,7 @@ def create_fake_hermes_app() -> FastAPI:
                         "sideband_authority": "server",
                         "create_readiness": "controller_ready_before_sdp",
                     },
-                    "provider": {"id": "openai", "model": "gpt-realtime-2.1", "models": ["gpt-realtime-2.1"], "voice": "marin", "reasoning_effort": None},
+                    "provider": {"id": "openai", "model": "gpt-realtime-2.1", "voice": "marin", "reasoning_effort": None},
                     "models": ["gpt-realtime-2.1"],
                     "sideband_authority": "server",
                     "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"]},
@@ -136,16 +151,6 @@ def create_fake_hermes_app() -> FastAPI:
                     "routing_policy": {"persona_model": "gpt-realtime-2.1", "substantial_work": "delegate", "default_fanout": 1, "confirmation": "announce_without_prompting"},
                     "retention": {"event_count": 2048, "event_bytes": 4194304, "context_bytes": 65536, "completed_item_days": 30},
                     "timeouts": {"provider_request_seconds": 30, "controller_ready_seconds": 10, "tool_seconds": 120, "worker_seconds": 3600, "approval_seconds": 300},
-                    "behaviors": {
-                        "server_controlled_webrtc": True,
-                        "hermes_tool_dispatch": True,
-                        "persona_context": True,
-                        "approval_enforcement": True,
-                        "durable_worker_jobs": True,
-                        "conversation_recovery": True,
-                        "replayable_events": True,
-                        "speech_interrupt": True,
-                    },
                 }
             },
         }
@@ -365,6 +370,9 @@ def create_fake_hermes_app() -> FastAPI:
         cached = app.state.realtime_requests.get(request_key)
         if cached is not None:
             return cached
+        unknown = unknown_result(conversation_id, request_id, "create")
+        if unknown is not None:
+            return unknown
         old_id = app.state.realtime_by_conversation.get(conversation_id)
         generation = (
             int(app.state.realtime_sessions[old_id]["session_generation"]) + 1
@@ -373,6 +381,7 @@ def create_fake_hermes_app() -> FastAPI:
         )
         session_id = f"rt_{uuid.uuid4().hex}"
         result = {
+            "client_request_id": request_id,
             "contract_version": "1.0",
             "realtime_session_id": session_id,
             "conversation_id": conversation_id,
@@ -404,32 +413,79 @@ def create_fake_hermes_app() -> FastAPI:
     @app.delete("/v1/realtime/sessions/{session_id}")
     async def realtime_delete(session_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
+        body = await request.json()
         document = realtime_session(session_id)
+        conversation_id = str(body.get("conversation_id") or "")
+        request_id = str(body.get("client_request_id") or "")
+        if conversation_id != document["conversation_id"] or not request_id:
+            raise HTTPException(status_code=400, detail="Invalid delete identity")
+        cached = app.state.realtime_requests.get((conversation_id, request_id))
+        if cached is not None:
+            return cached
+        unknown = unknown_result(conversation_id, request_id, "delete")
+        if unknown is not None:
+            return unknown
         document["state"] = "closed"
-        return {"realtime_session_id": session_id, "conversation_id": document["conversation_id"], "state": "closed"}
+        result = {"client_request_id": request_id, "realtime_session_id": session_id, "conversation_id": conversation_id, "state": "closed"}
+        app.state.realtime_requests[(conversation_id, request_id)] = result
+        return result
 
     @app.post("/v1/realtime/sessions/{session_id}/activate")
     async def realtime_activate(session_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
         body = await request.json()
         document = realtime_session(session_id)
+        if body.get("conversation_id") != document["conversation_id"]:
+            raise HTTPException(status_code=400, detail="conversation mismatch")
         if body.get("session_generation") != document["session_generation"]:
             raise HTTPException(status_code=409, detail="stale generation")
+        request_id = str(body.get("client_request_id") or "")
+        cached = app.state.realtime_requests.get((document["conversation_id"], request_id))
+        if cached is not None:
+            return cached
+        unknown = unknown_result(document["conversation_id"], request_id, "activate")
+        if unknown is not None:
+            return unknown
         document["state"] = "active"
-        return document
+        result = {**document, "client_request_id": request_id}
+        app.state.realtime_requests[(document["conversation_id"], request_id)] = result
+        return result
 
     @app.post("/v1/realtime/sessions/{session_id}/input")
     async def realtime_input(session_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
         body = await request.json()
-        realtime_session(session_id)
-        return {"client_request_id": body.get("client_request_id"), "accepted": True}
+        document = realtime_session(session_id)
+        if body.get("conversation_id") != document["conversation_id"]:
+            raise HTTPException(status_code=400, detail="conversation mismatch")
+        request_id = str(body.get("client_request_id") or "")
+        cached = app.state.realtime_requests.get((document["conversation_id"], request_id))
+        if cached is not None:
+            return cached
+        unknown = unknown_result(document["conversation_id"], request_id, "input")
+        if unknown is not None:
+            return unknown
+        result = {"client_request_id": request_id, "accepted": True, "state": "accepted"}
+        app.state.realtime_requests[(document["conversation_id"], request_id)] = result
+        return result
 
     @app.post("/v1/realtime/sessions/{session_id}/interrupt")
     async def realtime_interrupt(session_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
-        realtime_session(session_id)
-        return {"realtime_session_id": session_id, "interrupted": True}
+        body = await request.json()
+        document = realtime_session(session_id)
+        if body.get("conversation_id") != document["conversation_id"]:
+            raise HTTPException(status_code=400, detail="conversation mismatch")
+        request_id = str(body.get("client_request_id") or "")
+        cached = app.state.realtime_requests.get((document["conversation_id"], request_id))
+        if cached is not None:
+            return cached
+        unknown = unknown_result(document["conversation_id"], request_id, "interrupt")
+        if unknown is not None:
+            return unknown
+        result = {"client_request_id": request_id, "realtime_session_id": session_id, "interrupted": True, "state": "accepted"}
+        app.state.realtime_requests[(document["conversation_id"], request_id)] = result
+        return result
 
     @app.get("/v1/realtime/sessions/{session_id}/events")
     async def realtime_event_replay(session_id: str, request: Request, after: str | None = None) -> dict[str, Any]:
@@ -446,8 +502,19 @@ def create_fake_hermes_app() -> FastAPI:
     async def realtime_approval(session_id: str, approval_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
         body = await request.json()
-        realtime_session(session_id)
-        return {"approval_id": approval_id, "state": "resolved", "accepted": body.get("choice")}
+        document = realtime_session(session_id)
+        if body.get("conversation_id") != document["conversation_id"]:
+            raise HTTPException(status_code=400, detail="conversation mismatch")
+        request_id = str(body.get("client_request_id") or "")
+        cached = app.state.realtime_requests.get((document["conversation_id"], request_id))
+        if cached is not None:
+            return cached
+        unknown = unknown_result(document["conversation_id"], request_id, "approval")
+        if unknown is not None:
+            return unknown
+        result = {"client_request_id": request_id, "approval_id": approval_id, "state": "resolved", "accepted": body.get("choice") == "once"}
+        app.state.realtime_requests[(document["conversation_id"], request_id)] = result
+        return result
 
     @app.get("/v1/realtime/conversations/{conversation_id}")
     async def realtime_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
@@ -461,6 +528,16 @@ def create_fake_hermes_app() -> FastAPI:
             "worker_jobs": list(app.state.worker_jobs.get(conversation_id, {}).values()),
             "last_event_id": "ev_3",
         })
+
+    @app.get("/v1/realtime/conversations/{conversation_id}/requests/{client_request_id}")
+    async def realtime_request_result(
+        conversation_id: str, client_request_id: str, request: Request
+    ) -> dict[str, Any]:
+        require_realtime_auth(request)
+        result = app.state.realtime_requests.get((conversation_id, client_request_id))
+        if result is None:
+            raise HTTPException(status_code=404, detail="Request not found")
+        return result
 
     worker_path = "/v1/realtime/conversations/{conversation_id}/worker-jobs"
 

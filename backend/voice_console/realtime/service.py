@@ -27,6 +27,7 @@ from .responses import (
     parse_job,
     parse_job_events,
     parse_job_list,
+    parse_request_state,
     parse_session,
     parse_snapshot,
 )
@@ -127,9 +128,16 @@ class RealtimeProxyService:
         try:
             raw = await client.create_session(forwarded)
         except AmbiguousRealtimeMutation:
-            # Hermes contract major 1 makes create idempotent by client_request_id.
-            # Repeating the same request is the only safe acceptance reconciliation.
-            raw = await client.create_session(forwarded, timeout=max(5.0, self.request_timeout_seconds))
+            raw = await self._lookup_request(client, conversation_id, request_id, "create")
+        pending = parse_request_state(
+            raw, client_request_id=request_id, operation="create"
+        )
+        if pending is not None:
+            self.store.set_request_state(
+                owner_key=session.owner_key, target_name=target.name,
+                scope_id=conversation_id, request_id=request_id, state=pending["state"],
+            )
+            return pending
         result = parse_session(raw, conversation_id=conversation_id)
         result["client_request_id"] = request_id
         self.store.record_session(
@@ -152,7 +160,7 @@ class RealtimeProxyService:
 
     async def delete_session(
         self, session_id: str, *, target_name: str, auth_context: AuthContext,
-        client_request_id: str,
+        client_request_id: Any,
     ) -> dict[str, Any]:
         validate_identifier(session_id, "realtime_session_id")
         target = self.target(validate_identifier(target_name, "target"))
@@ -163,58 +171,60 @@ class RealtimeProxyService:
         self.require_conversation(
             mapping["conversation_id"], target=target, auth_context=auth_context
         )
-        request_id = validate_identifier(client_request_id, "client_request_id")
+        request_id = require_identifier(
+            {"client_request_id": client_request_id}, "client_request_id"
+        )
         claim_state = self.store.claim_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=session_id,
             request_id=request_id, operation="delete", payload={},
         )
-        if claim_state == "complete" and mapping["state"] == "closed":
-            return {
-                "realtime_session_id": session_id,
-                "conversation_id": mapping["conversation_id"],
-                "state": "closed",
-                "client_request_id": request_id,
-            }
-        if claim_state == "pending":
-            try:
-                await self.client(target).get_session(session_id)
-            except RealtimeProxyError as exc:
-                if exc.code != "resource_not_found":
-                    raise
-                self.store.update_session(session_id, state="closed")
-                self.store.complete_request(
-                    owner_key=mapping["owner_key"], target_name=target_name,
-                    scope_id=session_id, request_id=request_id,
-                )
-                return {
-                    "realtime_session_id": session_id,
-                    "conversation_id": mapping["conversation_id"],
-                    "state": "closed",
-                    "client_request_id": request_id,
-                }
-            raise AmbiguousRealtimeMutation("delete")
         client = self.client(target)
-        try:
-            raw = await client.delete_session(session_id)
-            result = parse_closed(
-                raw, conversation_id=mapping["conversation_id"], session_id=session_id
+        if claim_state == "complete":
+            cached = self.store.request_response(
+                owner_key=mapping["owner_key"], target_name=target_name,
+                scope_id=session_id, request_id=request_id,
             )
-        except AmbiguousRealtimeMutation:
+            if cached is not None:
+                return cached
+        if claim_state != "new":
+            raw = await self._lookup_request(
+                client, mapping["conversation_id"], request_id, "delete"
+            )
+        else:
             try:
-                await client.get_session(session_id)
-            except RealtimeProxyError as exc:
-                if exc.code != "resource_not_found":
-                    raise
-                result = {"realtime_session_id": session_id,
-                          "conversation_id": mapping["conversation_id"], "state": "closed"}
-            else:
-                raise
+                raw = await client.delete_session(
+                    session_id,
+                    {
+                        "client_request_id": request_id,
+                        "conversation_id": mapping["conversation_id"],
+                    },
+                )
+            except AmbiguousRealtimeMutation:
+                raw = await self._lookup_request(
+                    client, mapping["conversation_id"], request_id, "delete"
+                )
+        pending = parse_request_state(
+            raw, client_request_id=request_id, operation="delete"
+        )
+        if pending is not None:
+            self.store.set_request_state(
+                owner_key=mapping["owner_key"], target_name=target_name,
+                scope_id=session_id, request_id=request_id, state=pending["state"],
+                response=pending,
+            )
+            return pending
+        result = {
+            **parse_closed(
+                raw, conversation_id=mapping["conversation_id"], session_id=session_id
+            ),
+            "client_request_id": request_id,
+        }
         self.store.update_session(session_id, state="closed")
         self.store.complete_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=session_id,
-            request_id=request_id,
+            request_id=request_id, response=result,
         )
-        return {**result, "client_request_id": request_id}
+        return result
 
     async def session_action(
         self,
@@ -225,14 +235,14 @@ class RealtimeProxyService:
         target_name: str,
         auth_context: AuthContext,
     ) -> dict[str, Any]:
-        _target, client, _document = await self._owned_session(
+        _target, client, mapping = self._owned_mapping(
             session_id, target_name=target_name, auth_context=auth_context
         )
-        mapping = _document
         request_id = require_identifier(body, "client_request_id")
         generation = validate_generation(body.get("session_generation"))
         forwarded: dict[str, Any] = {
             "client_request_id": request_id,
+            "conversation_id": mapping["conversation_id"],
             "session_generation": generation,
         }
         if action == "input":
@@ -242,34 +252,38 @@ class RealtimeProxyService:
             request_id=request_id, operation=action, payload=forwarded,
         )
         if claim_state == "complete":
-            if action == "activate":
-                return parse_session(mapping, session_id=session_id, include_sdp=False)
-            if action == "input":
-                return {"client_request_id": request_id, "accepted": True}
-            return {"realtime_session_id": session_id, "interrupted": True}
-        if claim_state == "pending" and action != "input":
-            if action == "activate" and mapping["state"] == "active":
-                self.store.complete_request(
-                    owner_key=mapping["owner_key"], target_name=target_name,
-                    scope_id=session_id, request_id=request_id,
+            cached = self.store.request_response(
+                owner_key=mapping["owner_key"],
+                target_name=target_name,
+                scope_id=session_id,
+                request_id=request_id,
+            )
+            if cached is not None:
+                return cached
+        if claim_state != "new":
+            raw = await self._lookup_request(
+                client, mapping["conversation_id"], request_id, action
+            )
+        else:
+            try:
+                raw = await client.session_action(session_id, action, forwarded)
+            except AmbiguousRealtimeMutation:
+                raw = await self._lookup_request(
+                    client, mapping["conversation_id"], request_id, action
                 )
-                return parse_session(mapping, session_id=session_id, include_sdp=False)
-            raise AmbiguousRealtimeMutation(action)
-        try:
-            raw = await client.session_action(session_id, action, forwarded)
-        except AmbiguousRealtimeMutation:
-            if action == "activate":
-                observed = parse_session(
-                    await client.get_session(session_id),
-                    conversation_id=mapping["conversation_id"],
-                    session_id=session_id,
-                    include_sdp=False,
-                )
-                if observed["state"] != "active":
-                    raise
-                raw = observed
-            else:
-                raise
+        pending = parse_request_state(
+            raw, client_request_id=request_id, operation=action
+        )
+        if pending is not None:
+            self.store.set_request_state(
+                owner_key=mapping["owner_key"],
+                target_name=target_name,
+                scope_id=session_id,
+                request_id=request_id,
+                state=pending["state"],
+                response=pending,
+            )
+            return pending
         if action == "activate":
             result = parse_session(
                 raw,
@@ -277,11 +291,14 @@ class RealtimeProxyService:
                 session_id=session_id,
                 include_sdp=False,
             )
+            result["client_request_id"] = request_id
             self.store.update_session(session_id, state=result["state"])
         else:
-            allowed = {"client_request_id", "accepted"} if action == "input" else {
-                "realtime_session_id", "interrupted"
-            }
+            allowed = (
+                {"client_request_id", "accepted", "state"}
+                if action == "input"
+                else {"client_request_id", "realtime_session_id", "interrupted", "state"}
+            )
             result = {key: raw[key] for key in allowed if key in raw}
             if action == "input" and raw.get("client_request_id") != request_id:
                 raise RealtimeProxyError("target_identity_mismatch", "Hermes returned a mismatched request")
@@ -289,7 +306,7 @@ class RealtimeProxyService:
                 raise RealtimeProxyError("target_identity_mismatch", "Hermes returned a mismatched session")
         self.store.complete_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=session_id,
-            request_id=request_id,
+            request_id=request_id, response=result,
         )
         return result
 
@@ -325,32 +342,61 @@ class RealtimeProxyService:
         auth_context: AuthContext,
     ) -> dict[str, Any]:
         validate_identifier(approval_id, "approval_id")
-        _target, client, _document = await self._owned_session(
+        _target, client, mapping = self._owned_mapping(
             session_id, target_name=target_name, auth_context=auth_context
         )
-        mapping = _document
         request_id = require_identifier(body, "client_request_id")
         choice = require_nonempty_string(body, "choice", maximum=32)
         if choice not in {"once", "session", "always", "deny"}:
             raise RealtimeProxyError("invalid_request", "Unsupported approval choice", status=400)
-        forwarded = {"client_request_id": request_id,
-                     "session_generation": validate_generation(body.get("session_generation")),
-                     "choice": choice}
+        forwarded = {
+            "client_request_id": request_id,
+            "conversation_id": mapping["conversation_id"],
+            "session_generation": validate_generation(body.get("session_generation")),
+            "choice": choice,
+        }
         claim_state = self.store.claim_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=approval_id,
             request_id=request_id, operation="approval", payload=forwarded,
         )
         if claim_state == "complete":
-            return {"approval_id": approval_id, "state": "resolved", "accepted": choice}
-        if claim_state == "pending":
-            raise AmbiguousRealtimeMutation("approval")
-        result = parse_approval(
-            await client.resolve_approval(session_id, approval_id, forwarded),
-            approval_id=approval_id,
+            cached = self.store.request_response(
+                owner_key=mapping["owner_key"],
+                target_name=target_name,
+                scope_id=approval_id,
+                request_id=request_id,
+            )
+            if cached is not None:
+                return cached
+        if claim_state != "new":
+            raw = await self._lookup_request(
+                client, mapping["conversation_id"], request_id, "approval"
+            )
+        else:
+            try:
+                raw = await client.resolve_approval(session_id, approval_id, forwarded)
+            except AmbiguousRealtimeMutation:
+                raw = await self._lookup_request(
+                    client, mapping["conversation_id"], request_id, "approval"
+                )
+        pending = parse_request_state(
+            raw, client_request_id=request_id, operation="approval"
         )
+        if pending is not None:
+            self.store.set_request_state(
+                owner_key=mapping["owner_key"],
+                target_name=target_name,
+                scope_id=approval_id,
+                request_id=request_id,
+                state=pending["state"],
+                response=pending,
+            )
+            return pending
+        result = parse_approval(raw, approval_id=approval_id)
+        result["client_request_id"] = request_id
         self.store.complete_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=approval_id,
-            request_id=request_id,
+            request_id=request_id, response=result,
         )
         return result
 
@@ -368,6 +414,41 @@ class RealtimeProxyService:
             await self.client(target).conversation(conversation_id),
             conversation_id=conversation_id,
         )
+
+    async def request_result(
+        self,
+        conversation_id: str,
+        client_request_id: str,
+        *,
+        target_name: str,
+        auth_context: AuthContext,
+    ) -> dict[str, Any]:
+        validate_identifier(conversation_id, "conversation_id")
+        request_id = validate_identifier(client_request_id, "client_request_id")
+        target = self.target(target_name)
+        self.require_conversation(conversation_id, target=target, auth_context=auth_context)
+        raw = await self.client(target).request_result(conversation_id, request_id)
+        pending = parse_request_state(raw, client_request_id=request_id)
+        if pending is not None:
+            return pending
+        result = self._parse_completed_request(raw, conversation_id, request_id)
+        if raw.get("answer_sdp") is not None:
+            session = self.require_conversation(
+                conversation_id, target=target, auth_context=auth_context
+            )
+            self.store.record_session(
+                result,
+                owner_key=session.owner_key,
+                target_name=target.name,
+                request_id=request_id,
+            )
+            self.store.complete_request(
+                owner_key=session.owner_key,
+                target_name=target.name,
+                scope_id=conversation_id,
+                request_id=request_id,
+            )
+        return result
 
     async def worker_jobs(
         self,
@@ -478,11 +559,9 @@ class RealtimeProxyService:
         target_name: str,
         auth_context: AuthContext,
     ) -> tuple[TargetConfig, HermesRealtimeClient, dict[str, Any]]:
-        validate_identifier(session_id, "realtime_session_id")
-        target = self.target(validate_identifier(target_name, "target"))
-        owner_key = self.sessions.owner_key(auth_context, target)
-        mapping = self.store.require_session(session_id, owner_key=owner_key, target_name=target.name)
-        client = self.client(target)
+        target, client, mapping = self._owned_mapping(
+            session_id, target_name=target_name, auth_context=auth_context
+        )
         raw = await client.get_session(session_id)
         document = parse_session(
             raw,
@@ -492,6 +571,78 @@ class RealtimeProxyService:
         )
         self.require_conversation(mapping["conversation_id"], target=target, auth_context=auth_context)
         return target, client, {**mapping, **document}
+
+    def _owned_mapping(
+        self,
+        session_id: str,
+        *,
+        target_name: str,
+        auth_context: AuthContext,
+    ) -> tuple[TargetConfig, HermesRealtimeClient, dict[str, Any]]:
+        validate_identifier(session_id, "realtime_session_id")
+        target = self.target(validate_identifier(target_name, "target"))
+        owner_key = self.sessions.owner_key(auth_context, target)
+        mapping = self.store.require_session(
+            session_id, owner_key=owner_key, target_name=target.name
+        )
+        self.require_conversation(
+            mapping["conversation_id"], target=target, auth_context=auth_context
+        )
+        return target, self.client(target), mapping
+
+    async def _lookup_request(
+        self,
+        client: HermesRealtimeClient,
+        conversation_id: str,
+        request_id: str,
+        operation: str,
+    ) -> dict[str, Any]:
+        try:
+            return await client.request_result(conversation_id, request_id)
+        except RealtimeProxyError as exc:
+            if exc.code == "resource_not_found":
+                raise AmbiguousRealtimeMutation(operation) from exc
+            raise
+
+    @staticmethod
+    def _parse_completed_request(
+        raw: Mapping[str, Any], conversation_id: str, request_id: str
+    ) -> dict[str, Any]:
+        parse_request_state(raw, client_request_id=request_id)
+        if raw.get("answer_sdp") is not None:
+            result = parse_session(raw, conversation_id=conversation_id)
+        elif raw.get("state") == "closed" and raw.get("realtime_session_id"):
+            result = parse_closed(
+                raw,
+                conversation_id=conversation_id,
+                session_id=validate_identifier(
+                    str(raw["realtime_session_id"]), "realtime_session_id"
+                ),
+            )
+        elif raw.get("approval_id") is not None:
+            result = parse_approval(
+                raw,
+                approval_id=validate_identifier(str(raw["approval_id"]), "approval_id"),
+            )
+        elif raw.get("interrupted") is True:
+            session_id = validate_identifier(
+                str(raw.get("realtime_session_id") or ""), "realtime_session_id"
+            )
+            result = {
+                "realtime_session_id": session_id,
+                "interrupted": True,
+                "state": "accepted",
+            }
+        elif raw.get("accepted") is True:
+            result = {"accepted": True, "state": "accepted"}
+        elif raw.get("realtime_session_id") and raw.get("session_generation"):
+            result = parse_session(raw, conversation_id=conversation_id, include_sdp=False)
+        else:
+            raise RealtimeProxyError(
+                "invalid_target_response", "Hermes returned an unknown request result"
+            )
+        result["client_request_id"] = request_id
+        return result
 
 
 def _find_command(job: Mapping[str, Any], command_id: str) -> dict[str, Any] | None:

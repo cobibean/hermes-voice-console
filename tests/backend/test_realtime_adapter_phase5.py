@@ -13,6 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 from voice_console.app import create_app
 from voice_console.fake_target import API_KEY, create_fake_hermes_app
 from voice_console.realtime.contracts import check_realtime_compatibility
+from voice_console.realtime.hermes_client import RealtimeProxyError
 from voice_console.realtime.store import RealtimeMappingStore
 
 
@@ -117,6 +118,9 @@ def test_capability_negotiation_is_strict_and_preserves_rich_contract(console):
     document = response.json()
     assert document["compatible"] is True
     assert document["version"] == "1.0"
+    assert document["contract"]["sideband_authority"] == "server"
+    assert document["contract"]["models"] == ["gpt-realtime-2.1"]
+    assert "behaviors" not in document["contract"]
     assert document["contract"]["workers"]["commands"] == ["refine", "redirect", "cancel"]
     assert "Bearer fake" not in response.text
 
@@ -139,7 +143,7 @@ def test_disabled_target_fails_closed(tmp_path, monkeypatch):
 
 
 def test_create_activate_snapshot_replay_gap_and_approval(console):
-    client, _app, conversation_id = console
+    client, app, conversation_id = console
     created = create_realtime(client, conversation_id)
     assert created.status_code == 201
     session = created.json()
@@ -181,6 +185,19 @@ def test_create_activate_snapshot_replay_gap_and_approval(console):
     )
     assert approval.status_code == 200
     assert approval.json()["state"] == "resolved"
+    # Reconciliation must use the durable owner/mutation ledger before asking
+    # the upstream for an ephemeral session that may already be gone.
+    app.state.fake_hermes_app.state.realtime_sessions.pop(session_id)
+    duplicate = client.post(
+        f"/api/realtime/sessions/{session_id}/approvals/approval_1?target=fake",
+        json={
+            "session_generation": generation,
+            "client_request_id": "approval_request_1",
+            "choice": "once",
+        },
+    )
+    assert duplicate.json() == approval.json()
+    assert duplicate.json()["accepted"] is True
 
 
 def test_worker_job_routes_commands_and_idempotency(console):
@@ -351,6 +368,20 @@ def test_compromised_target_documents_are_sanitized_or_rejected(console):
     assert malformed_cursor.json()["error"]["code"] == "invalid_target_response"
     fake.state.realtime_overrides.pop("events")
 
+    fake.state.realtime_overrides["conversation"] = {
+        "work_summary": [
+            {"message": "Bearer private-token", "metadata": {"content": "sk-secret"}}
+        ]
+    }
+    sanitized = client.get(
+        f"/api/realtime/conversations/{conversation_id}?target=fake"
+    )
+    assert sanitized.status_code == 200
+    assert "private-token" not in sanitized.text
+    assert "sk-secret" not in sanitized.text
+    assert "[redacted]" in sanitized.text
+    fake.state.realtime_overrides.pop("conversation")
+
     fake.state.realtime_overrides["worker_job"] = {
         "worker_job_id": "job_wrong",
         "api_key": "sk-worker-secret",
@@ -389,7 +420,11 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
             }
         )
         assert socket.receive_json()["type"] == "snapshot"
-        assert socket.receive_json()["type"] == "subscribed"
+        subscribed = socket.receive_json()
+        assert subscribed["type"] == "subscribed"
+        assert subscribed["after"] == "ev_3"
+        assert subscribed["client_after"] == "ev_1"
+        assert subscribed["cursor_rebased"] is True
         socket.send_json(
             {
                 "type": "input",
@@ -398,10 +433,9 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
                 "text": "Continue while the worker runs",
             }
         )
-        received = [socket.receive_json() for _ in range(3)]
-        ack = next(frame for frame in received if frame["type"] == "ack")
+        ack = socket.receive_json()
+        assert ack["type"] == "ack"
         assert ack["client_request_id"] == "ws_input_1"
-        assert any(frame["type"] == "event" for frame in received)
         socket.send_json({"type": "ping"})
         while True:
             frame = socket.receive_json()
@@ -426,12 +460,9 @@ def test_realtime_control_socket_rejects_oversized_frames(console):
 def test_delete_is_request_idempotent_without_replaying_target_mutation(console):
     client, _app, conversation_id = console
     session_id = create_realtime(client, conversation_id).json()["realtime_session_id"]
-    path = (
-        f"/api/realtime/sessions/{session_id}"
-        "?target=fake&client_request_id=delete_1"
-    )
-    first = client.delete(path)
-    second = client.delete(path)
+    path = f"/api/realtime/sessions/{session_id}?target=fake"
+    first = client.request("DELETE", path, json={"client_request_id": "delete_1"})
+    second = client.request("DELETE", path, json={"client_request_id": "delete_1"})
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json()
     assert first.json()["state"] == "closed"
@@ -482,3 +513,48 @@ def test_content_free_mapping_and_request_ledger_survive_reopen(tmp_path):
         == "complete"
     )
     reopened.close()
+
+
+def test_uniform_mutation_unknown_result_is_202_and_queryable(console):
+    client, _app, conversation_id = console
+    session = create_realtime(client, conversation_id).json()
+    unknown = client.post(
+        f"/api/realtime/sessions/{session['realtime_session_id']}/interrupt?target=fake",
+        json={
+            "client_request_id": "unknown_interrupt_1",
+            "session_generation": session["session_generation"],
+        },
+    )
+    assert unknown.status_code == 202
+    assert unknown.json() == {
+        "client_request_id": "unknown_interrupt_1",
+        "state": "outcome_unknown",
+        "accepted": False,
+        "operation": "interrupt",
+    }
+    lookup = client.get(
+        f"/api/realtime/conversations/{conversation_id}/requests/unknown_interrupt_1?target=fake"
+    )
+    assert lookup.status_code == 200
+    assert lookup.json() == unknown.json()
+
+
+def test_session_mapping_rejects_compromised_identifier_collision(tmp_path):
+    store = RealtimeMappingStore(tmp_path)
+    document = {
+        "realtime_session_id": "rt_collision",
+        "conversation_id": "conversation_1",
+        "session_generation": 1,
+        "state": "controller_ready",
+    }
+    store.record_session(
+        document, owner_key="owner_1", target_name="fake", request_id="request_1"
+    )
+    with pytest.raises(RealtimeProxyError, match="owned by another request"):
+        store.record_session(
+            {**document, "conversation_id": "conversation_2"},
+            owner_key="owner_2",
+            target_name="fake",
+            request_id="request_2",
+        )
+    store.close()

@@ -21,20 +21,21 @@ REQUIRED_FEATURES = frozenset(
 )
 
 REQUIRED_ENDPOINTS = {
-        "/v1/realtime/sessions": "POST",
-        "/v1/realtime/sessions/{session_id}": "GET|DELETE",
-        "/v1/realtime/sessions/{session_id}/activate": "POST",
-        "/v1/realtime/sessions/{session_id}/input": "POST",
-        "/v1/realtime/sessions/{session_id}/interrupt": "POST",
-        "/v1/realtime/sessions/{session_id}/events": "GET",
-        "/v1/realtime/sessions/{session_id}/approvals/{approval_id}": "POST",
-        "/v1/realtime/conversations/{conversation_id}": "GET",
-        "/v1/realtime/conversations/{conversation_id}/worker-jobs": "GET",
-        "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}": "GET",
-        "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/events": "GET",
-        "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/refine": "POST",
-        "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/redirect": "POST",
-        "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/cancel": "POST",
+    "/v1/realtime/sessions": "POST",
+    "/v1/realtime/sessions/{session_id}": "GET|DELETE",
+    "/v1/realtime/sessions/{session_id}/activate": "POST",
+    "/v1/realtime/sessions/{session_id}/input": "POST",
+    "/v1/realtime/sessions/{session_id}/interrupt": "POST",
+    "/v1/realtime/sessions/{session_id}/events": "GET",
+    "/v1/realtime/sessions/{session_id}/approvals/{approval_id}": "POST",
+    "/v1/realtime/conversations/{conversation_id}": "GET",
+    "/v1/realtime/conversations/{conversation_id}/requests/{client_request_id}": "GET",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs": "GET",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}": "GET",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/events": "GET",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/refine": "POST",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/redirect": "POST",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/cancel": "POST",
 }
 
 
@@ -72,6 +73,11 @@ def check_realtime_compatibility(capabilities: Mapping[str, Any]) -> RealtimeCom
         reasons.append(
             f"unsupported contracts.realtime major {version_text or 'missing'}; expected 1.x"
         )
+    if raw.get("sideband_authority") != "server":
+        reasons.append("top-level server sideband authority is missing")
+    models = raw.get("models")
+    if not isinstance(models, list) or "gpt-realtime-2.1" not in models:
+        reasons.append("top-level Realtime model availability is missing")
 
     features_value = capabilities.get("features")
     features = {
@@ -235,7 +241,11 @@ def _safe_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
             }
         return None
 
-    result: dict[str, Any] = {"version": primitive(raw.get("version"))}
+    result: dict[str, Any] = {
+        "version": primitive(raw.get("version")),
+        "sideband_authority": primitive(raw.get("sideband_authority")),
+        "models": primitive(raw.get("models")),
+    }
     for section, keys in allowed.items():
         value = raw.get(section)
         if isinstance(value, Mapping):

@@ -63,9 +63,14 @@ class HermesRealtimeClient:
     async def get_session(self, session_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/realtime/sessions/{_segment(session_id)}")
 
-    async def delete_session(self, session_id: str) -> dict[str, Any]:
+    async def delete_session(
+        self, session_id: str, body: Mapping[str, Any]
+    ) -> dict[str, Any]:
         return await self._request(
-            "DELETE", f"/v1/realtime/sessions/{_segment(session_id)}", mutation="delete"
+            "DELETE",
+            f"/v1/realtime/sessions/{_segment(session_id)}",
+            json_body=body,
+            mutation="delete",
         )
 
     async def session_action(
@@ -99,6 +104,14 @@ class HermesRealtimeClient:
     async def conversation(self, conversation_id: str) -> dict[str, Any]:
         return await self._request(
             "GET", f"/v1/realtime/conversations/{_segment(conversation_id)}"
+        )
+
+    async def request_result(
+        self, conversation_id: str, client_request_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"/v1/realtime/conversations/{_segment(conversation_id)}/requests/{_segment(client_request_id)}",
         )
 
     async def list_worker_jobs(self, conversation_id: str) -> dict[str, Any]:

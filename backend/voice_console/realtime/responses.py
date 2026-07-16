@@ -66,6 +66,30 @@ def parse_closed(document: Mapping[str, Any], *, conversation_id: str,
     return {"realtime_session_id": session_id, "conversation_id": conversation_id, "state": "closed"}
 
 
+def parse_request_state(
+    document: Mapping[str, Any], *, client_request_id: str,
+    operation: str | None = None,
+) -> dict[str, Any] | None:
+    if document.get("client_request_id") != client_request_id:
+        _mismatch("client request")
+    state = document.get("state")
+    if state not in {"in_progress", "outcome_unknown"}:
+        return None
+    result = {
+        "client_request_id": client_request_id,
+        "state": state,
+        "accepted": False,
+    }
+    raw_operation = document.get("operation")
+    if raw_operation is not None:
+        if raw_operation not in {"create", "activate", "input", "interrupt", "approval", "delete"}:
+            _invalid("request operation")
+        if operation is not None and raw_operation != operation:
+            _mismatch("request operation")
+        result["operation"] = raw_operation
+    return result
+
+
 def parse_events(document: Mapping[str, Any], *, conversation_id: str,
                  session_id: str) -> dict[str, Any]:
     if _id(document, "conversation_id") != conversation_id:
@@ -235,6 +259,12 @@ def _safe(value: Any, depth: int = 0) -> Any:
     if isinstance(value, list):
         return [_safe(item, depth + 1) for item in value[:200]]
     if isinstance(value, str):
+        lowered = value.lower()
+        if any(
+            marker in lowered
+            for marker in ("sk-", "bearer ", "api_key", "authorization", "secret", "token=")
+        ):
+            return "[redacted]"
         return value[:32_000]
     if isinstance(value, (int, float, bool)) or value is None:
         return value

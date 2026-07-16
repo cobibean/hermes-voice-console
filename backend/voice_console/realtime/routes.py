@@ -52,14 +52,17 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
         )
 
     @router.delete("/sessions/{session_id}")
-    async def delete_session(
-        session_id: str, target: str, client_request_id: str, request: Request
-    ):
+    async def delete_session(session_id: str, target: str, request: Request):
         auth_context = context(request)
         return await _respond(
-            lambda: service.delete_session(
-                session_id, target_name=target, auth_context=auth_context,
-                client_request_id=client_request_id,
+            lambda: _with_body(
+                request,
+                lambda body: service.delete_session(
+                    session_id,
+                    target_name=target,
+                    auth_context=auth_context,
+                    client_request_id=body.get("client_request_id"),
+                ),
             )
         )
 
@@ -111,6 +114,24 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
             lambda: service.conversation(
                 conversation_id, target_name=target, auth_context=auth_context
             )
+        )
+
+    @router.get("/conversations/{conversation_id}/requests/{client_request_id}")
+    async def request_result(
+        conversation_id: str,
+        client_request_id: str,
+        target: str,
+        request: Request,
+    ):
+        auth_context = context(request)
+        return await _respond(
+            lambda: service.request_result(
+                conversation_id,
+                client_request_id,
+                target_name=target,
+                auth_context=auth_context,
+            ),
+            outcome_unknown_status=200,
         )
 
     worker_base = "/conversations/{conversation_id}/worker-jobs"
@@ -254,11 +275,17 @@ async def _compatibility_document(
 
 
 async def _respond(
-    operation: Callable[[], Awaitable[dict[str, Any]]], *, status: int = 200
+    operation: Callable[[], Awaitable[dict[str, Any]]],
+    *,
+    status: int = 200,
+    outcome_unknown_status: int = 202,
 ):
     try:
         document = await operation()
-        return JSONResponse(document, status_code=status)
+        resolved_status = (
+            outcome_unknown_status if document.get("state") == "outcome_unknown" else status
+        )
+        return JSONResponse(document, status_code=resolved_status)
     except RealtimeProxyError as exc:
         return JSONResponse(exc.public_dict(), status_code=exc.status)
     except ConfigError:

@@ -60,8 +60,16 @@ async def handle_realtime_socket(ws: WebSocket, state: ConsoleState) -> None:
             conversation_id, target_name=target, auth_context=auth_context
         )
         await send({"type": "snapshot", "snapshot": snapshot})
-        cursor = after if after is not None else snapshot.get("last_event_id")
-        await send({"type": "subscribed", "realtime_session_id": session_id, "after": cursor})
+        cursor = snapshot.get("last_event_id")
+        await send(
+            {
+                "type": "subscribed",
+                "realtime_session_id": session_id,
+                "after": cursor,
+                "client_after": after,
+                "cursor_rebased": after is not None and after != cursor,
+            }
+        )
 
         stop = asyncio.Event()
 
