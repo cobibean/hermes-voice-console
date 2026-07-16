@@ -118,6 +118,7 @@ def assert_phase4_shape(document: dict, shape: dict) -> None:
         "string": str,
         "integer": int,
         "boolean": bool,
+        "object": dict,
     }
     for key, type_name in shape["types"].items():
         assert type(document[key]) is expected_types[type_name]
@@ -134,7 +135,7 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
             / "hermes_realtime_phase4_mutation_shapes.json"
         ).read_text()
     )
-    assert fixture["source_commit"] == "9e4ea6935f71c38bf598d930978e9ea2526136a8"
+    assert fixture["source_revision"].endswith("+phase4.1-planned")
     shapes = fixture["mutations"]
     fake = app.state.fake_hermes_app
 
@@ -154,6 +155,29 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
                 f"/api/realtime/sessions/{session_id}/activate?target=fake",
                 json={
                     "client_request_id": "shape_activate_1",
+                    "session_generation": generation,
+                },
+            ),
+        ),
+        (
+            "turn_mode_update",
+            "shape_turn_mode_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/turn-mode?target=fake",
+                json={
+                    "client_request_id": "shape_turn_mode_1",
+                    "session_generation": generation,
+                    "turn_mode": "manual",
+                },
+            ),
+        ),
+        (
+            "manual_audio_commit",
+            "shape_commit_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/commit?target=fake",
+                json={
+                    "client_request_id": "shape_commit_1",
                     "session_generation": generation,
                 },
             ),
@@ -201,6 +225,19 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
             shapes[operation],
         )
 
+    rejected = client.post(
+        f"/api/realtime/sessions/{session_id}/commit?target=fake",
+        json={
+            "client_request_id": "empty_shape_commit_1",
+            "session_generation": generation,
+        },
+    )
+    assert rejected.status_code == 409
+    assert_phase4_shape(
+        fake.state.realtime_requests[(conversation_id, "empty_shape_commit_1")],
+        shapes["manual_audio_commit_rejected"],
+    )
+
     unknown = client.post(
         f"/api/realtime/sessions/{session_id}/interrupt?target=fake",
         json={
@@ -237,6 +274,8 @@ def test_capability_negotiation_is_strict_and_preserves_rich_contract(console):
     assert document["contract"]["models"] == ["gpt-realtime-2.1"]
     assert "behaviors" not in document["contract"]
     assert document["contract"]["workers"]["commands"] == ["refine", "redirect", "cancel"]
+    assert document["contract"]["sessions"]["manual_audio_commit"] is True
+    assert document["contract"]["sessions"]["turn_mode_update"] is True
     assert "Bearer fake" not in response.text
 
     incompatible = check_realtime_compatibility(
@@ -551,6 +590,46 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
         ack = socket.receive_json()
         assert ack["type"] == "ack"
         assert ack["client_request_id"] == "ws_input_1"
+        socket.send_json(
+            {
+                "type": "turn_mode_update",
+                "client_request_id": "ws_turn_mode_1",
+                "session_generation": session["session_generation"],
+                "turn_mode": "manual",
+            }
+        )
+        turn_ack = socket.receive_json()
+        assert turn_ack == {
+            "type": "ack",
+            "client_request_id": "ws_turn_mode_1",
+            "result": {
+                "client_request_id": "ws_turn_mode_1",
+                "realtime_session_id": session["realtime_session_id"],
+                "session_generation": session["session_generation"],
+                "turn_mode": "manual",
+                "state": "accepted",
+            },
+        }
+        socket.send_json(
+            {
+                "type": "manual_audio_commit",
+                "client_request_id": "ws_commit_1",
+                "session_generation": session["session_generation"],
+            }
+        )
+        commit_ack = socket.receive_json()
+        assert commit_ack == {
+            "type": "ack",
+            "client_request_id": "ws_commit_1",
+            "result": {
+                "client_request_id": "ws_commit_1",
+                "realtime_session_id": session["realtime_session_id"],
+                "session_generation": session["session_generation"],
+                "state": "accepted",
+                "audio_commit_requested": True,
+                "response_requested": True,
+            },
+        }
         socket.send_json({"type": "ping"})
         while True:
             frame = socket.receive_json()
@@ -652,6 +731,177 @@ def test_uniform_mutation_unknown_result_is_202_and_queryable(console):
     )
     assert lookup.status_code == 200
     assert lookup.json() == unknown.json()
+
+
+def test_manual_controls_are_typed_idempotent_and_reconciled(console):
+    client, app, conversation_id = console
+    session = create_realtime(client, conversation_id, "manual_create_1").json()
+    session_id = session["realtime_session_id"]
+    generation = session["session_generation"]
+    base = f"/api/realtime/sessions/{session_id}"
+
+    unavailable = client.post(
+        f"{base}/commit?target=fake",
+        json={
+            "client_request_id": "commit_automatic_1",
+            "session_generation": generation,
+        },
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.json()["error"]["code"] == "manual_audio_commit_unavailable"
+
+    manual_body = {
+        "client_request_id": "mode_manual_1",
+        "session_generation": generation,
+        "turn_mode": "manual",
+    }
+    manual = client.post(f"{base}/turn-mode?target=fake", json=manual_body)
+    manual_duplicate = client.post(f"{base}/turn-mode?target=fake", json=manual_body)
+    assert manual.status_code == manual_duplicate.status_code == 200
+    assert manual.json() == manual_duplicate.json() == {
+        "client_request_id": "mode_manual_1",
+        "realtime_session_id": session_id,
+        "session_generation": generation,
+        "turn_mode": "manual",
+        "state": "accepted",
+    }
+    assert app.state.fake_hermes_app.state.realtime_control_calls[
+        ("turn_mode_update", session_id)
+    ] == 1
+
+    commit_body = {
+        "client_request_id": "commit_manual_1",
+        "session_generation": generation,
+    }
+    committed = client.post(f"{base}/commit?target=fake", json=commit_body)
+    duplicate = client.post(f"{base}/commit?target=fake", json=commit_body)
+    assert committed.status_code == duplicate.status_code == 200
+    assert committed.json() == duplicate.json() == {
+        "client_request_id": "commit_manual_1",
+        "realtime_session_id": session_id,
+        "session_generation": generation,
+        "state": "accepted",
+        "audio_commit_requested": True,
+        "response_requested": True,
+    }
+    assert app.state.fake_hermes_app.state.realtime_control_calls[
+        ("manual_audio_commit", session_id)
+    ] == 1
+
+    conflict = client.post(
+        f"{base}/commit?target=fake",
+        json={**commit_body, "session_generation": generation + 1},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "idempotency_conflict"
+
+    stale = client.post(
+        f"{base}/turn-mode?target=fake",
+        json={
+            "client_request_id": "mode_stale_1",
+            "session_generation": generation + 1,
+            "turn_mode": "automatic",
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "turn_mode_update_unavailable"
+
+    unknown_body = {
+        "client_request_id": "unknown_manual_audio_1",
+        "session_generation": generation,
+    }
+    unknown = client.post(f"{base}/commit?target=fake", json=unknown_body)
+    unknown_duplicate = client.post(f"{base}/commit?target=fake", json=unknown_body)
+    assert unknown.status_code == unknown_duplicate.status_code == 202
+    assert unknown.json() == unknown_duplicate.json() == {
+        "client_request_id": "unknown_manual_audio_1",
+        "operation": "manual_audio_commit",
+        "state": "outcome_unknown",
+        "accepted": False,
+    }
+    assert app.state.fake_hermes_app.state.realtime_control_calls[
+        ("manual_audio_commit", session_id)
+    ] == 1
+
+    rejected_body = {
+        "client_request_id": "empty_manual_audio_1",
+        "session_generation": generation,
+    }
+    rejected = client.post(f"{base}/commit?target=fake", json=rejected_body)
+    rejected_duplicate = client.post(f"{base}/commit?target=fake", json=rejected_body)
+    expected_rejection = {
+        "client_request_id": "empty_manual_audio_1",
+        "operation": "manual_audio_commit",
+        "state": "rejected",
+        "accepted": False,
+        "error": {"code": "audio_buffer_empty"},
+    }
+    assert rejected.status_code == rejected_duplicate.status_code == 409
+    assert rejected.json() == rejected_duplicate.json() == expected_rejection
+    lookup = client.get(
+        f"/api/realtime/conversations/{conversation_id}/requests/empty_manual_audio_1?target=fake"
+    )
+    assert lookup.status_code == 200
+    assert lookup.json() == expected_rejection
+    assert app.state.fake_hermes_app.state.realtime_control_calls[
+        ("manual_audio_commit", session_id)
+    ] == 2
+
+    automatic = client.post(
+        f"{base}/turn-mode?target=fake",
+        json={
+            "client_request_id": "mode_automatic_1",
+            "session_generation": generation,
+            "turn_mode": "automatic",
+        },
+    )
+    assert automatic.status_code == 200
+    assert automatic.json()["turn_mode"] == "automatic"
+    current = client.get(f"{base}?target=fake")
+    snapshot = client.get(
+        f"/api/realtime/conversations/{conversation_id}?target=fake"
+    )
+    assert current.json()["turn_mode"] == "automatic"
+    assert snapshot.json()["session"]["turn_mode"] == "automatic"
+    unavailable_again = client.post(
+        f"{base}/commit?target=fake",
+        json={
+            "client_request_id": "commit_automatic_2",
+            "session_generation": generation,
+        },
+    )
+    assert unavailable_again.status_code == 409
+
+
+def test_ambiguous_manual_commit_reconciles_without_provider_retry(console):
+    client, app, conversation_id = console
+    app.state.console_state.realtime.request_timeout_seconds = 0.05
+    session = create_realtime(client, conversation_id, "manual_ambiguous_create").json()
+    session_id = session["realtime_session_id"]
+    generation = session["session_generation"]
+    base = f"/api/realtime/sessions/{session_id}"
+    mode = client.post(
+        f"{base}/turn-mode?target=fake",
+        json={
+            "client_request_id": "manual_ambiguous_mode",
+            "session_generation": generation,
+            "turn_mode": "manual",
+        },
+    )
+    assert mode.status_code == 200
+
+    committed = client.post(
+        f"{base}/commit?target=fake",
+        json={
+            "client_request_id": "ambiguous_manual_commit_1",
+            "session_generation": generation,
+        },
+    )
+    assert committed.status_code == 200
+    assert committed.json()["audio_commit_requested"] is True
+    assert app.state.fake_hermes_app.state.realtime_control_calls[
+        ("manual_audio_commit", session_id)
+    ] == 1
 
 
 def test_session_mapping_rejects_compromised_identifier_collision(tmp_path):

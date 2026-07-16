@@ -85,6 +85,22 @@ class HermesRealtimeClient:
             mutation=action,
         )
 
+    async def manual_control(
+        self, session_id: str, operation: str, body: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        paths = {
+            "manual_audio_commit": "commit",
+            "turn_mode_update": "turn-mode",
+        }
+        if operation not in paths:
+            raise ValueError("unsupported Realtime manual control")
+        return await self._request(
+            "POST",
+            f"/v1/realtime/sessions/{_segment(session_id)}/{paths[operation]}",
+            json_body=body,
+            mutation=operation,
+        )
+
     async def session_events(self, session_id: str, after: str | None) -> dict[str, Any]:
         params = {"after": after} if after else None
         return await self._request(
@@ -190,6 +206,12 @@ class HermesRealtimeClient:
 
         document = _json_object(bytes(raw))
         if status_code >= 400:
+            if (
+                status_code == 409
+                and mutation == "manual_audio_commit"
+                and document.get("state") == "rejected"
+            ):
+                return document
             code, message = _public_upstream_error(document, status_code)
             raise RealtimeProxyError(code, message, status=_safe_status(status_code))
         return document
@@ -217,6 +239,15 @@ def _public_upstream_error(document: Mapping[str, Any], status: int) -> tuple[st
         "stale_generation": ("stale_generation", "The Realtime session generation is stale"),
         "invalid_generation": ("invalid_request", "The Realtime session generation is invalid"),
         "invalid_revision": ("invalid_request", "The worker job revision is invalid"),
+        "manual_audio_commit_unavailable": (
+            "manual_audio_commit_unavailable",
+            "Manual audio commit is unavailable for this session",
+        ),
+        "turn_mode_update_unavailable": (
+            "turn_mode_update_unavailable",
+            "The Realtime turn mode could not be updated",
+        ),
+        "invalid_turn_mode": ("invalid_turn_mode", "The requested turn mode is invalid"),
     }
     if raw_code in safe:
         return safe[raw_code]

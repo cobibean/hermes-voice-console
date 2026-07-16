@@ -74,6 +74,38 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
             name=f"realtime_session_{action}",
         )
 
+    @router.post("/sessions/{session_id}/commit")
+    async def manual_audio_commit(session_id: str, target: str, request: Request):
+        auth_context = context(request)
+        return await _respond(
+            lambda: _with_body(
+                request,
+                lambda body: service.manual_control(
+                    session_id,
+                    "manual_audio_commit",
+                    body,
+                    target_name=target,
+                    auth_context=auth_context,
+                ),
+            )
+        )
+
+    @router.post("/sessions/{session_id}/turn-mode")
+    async def turn_mode_update(session_id: str, target: str, request: Request):
+        auth_context = context(request)
+        return await _respond(
+            lambda: _with_body(
+                request,
+                lambda body: service.manual_control(
+                    session_id,
+                    "turn_mode_update",
+                    body,
+                    target_name=target,
+                    auth_context=auth_context,
+                ),
+            )
+        )
+
     @router.get("/sessions/{session_id}/events")
     async def events(
         session_id: str,
@@ -132,6 +164,7 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
                 auth_context=auth_context,
             ),
             outcome_unknown_status=200,
+            rejected_status=200,
         )
 
     worker_base = "/conversations/{conversation_id}/worker-jobs"
@@ -279,11 +312,16 @@ async def _respond(
     *,
     status: int = 200,
     outcome_unknown_status: int = 202,
+    rejected_status: int = 409,
 ):
     try:
         document = await operation()
         resolved_status = (
-            outcome_unknown_status if document.get("state") == "outcome_unknown" else status
+            rejected_status
+            if document.get("state") == "rejected"
+            else outcome_unknown_status
+            if document.get("state") == "outcome_unknown"
+            else status
         )
         return JSONResponse(document, status_code=resolved_status)
     except RealtimeProxyError as exc:

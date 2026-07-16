@@ -47,6 +47,10 @@ def parse_session(document: Mapping[str, Any], *, conversation_id: str | None = 
         "session_generation": generation,
         "state": state,
     }
+    turn_mode = document.get("turn_mode")
+    if turn_mode not in {"server_vad", "automatic", "manual"}:
+        _invalid("turn mode")
+    result["turn_mode"] = turn_mode
     if include_sdp:
         sdp = document.get("answer_sdp")
         if not isinstance(sdp, str) or not sdp.startswith("v=0") or len(sdp) > 262_144:
@@ -127,6 +131,78 @@ def parse_interrupt_result(
     }
 
 
+def parse_manual_audio_commit_result(
+    document: Mapping[str, Any], *, session_id: str, session_generation: int,
+    client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(
+        document,
+        client_request_id=client_request_id,
+        operation="manual_audio_commit",
+    )
+    if document.get("state") == "rejected":
+        error = document.get("error")
+        if (
+            document.get("operation") != "manual_audio_commit"
+            or document.get("accepted") is not False
+            or not isinstance(error, Mapping)
+            or set(error) != {"code"}
+            or error.get("code") != "audio_buffer_empty"
+        ):
+            _invalid("manual audio commit rejection")
+        return {
+            "client_request_id": client_request_id,
+            "operation": "manual_audio_commit",
+            "state": "rejected",
+            "accepted": False,
+            "error": {"code": "audio_buffer_empty"},
+        }
+    if _id(document, "realtime_session_id") != session_id:
+        _mismatch("session")
+    if document.get("session_generation") != session_generation:
+        _mismatch("session generation")
+    if (
+        document.get("state") != "accepted"
+        or document.get("audio_commit_requested") is not True
+        or document.get("response_requested") is not True
+    ):
+        _invalid("manual audio commit acceptance")
+    return {
+        "client_request_id": client_request_id,
+        "realtime_session_id": session_id,
+        "session_generation": session_generation,
+        "state": "accepted",
+        "audio_commit_requested": True,
+        "response_requested": True,
+    }
+
+
+def parse_turn_mode_result(
+    document: Mapping[str, Any], *, session_id: str, session_generation: int,
+    client_request_id: str, turn_mode: str,
+) -> dict[str, Any]:
+    parse_request_state(
+        document,
+        client_request_id=client_request_id,
+        operation="turn_mode_update",
+    )
+    if _id(document, "realtime_session_id") != session_id:
+        _mismatch("session")
+    if document.get("session_generation") != session_generation:
+        _mismatch("session generation")
+    if document.get("turn_mode") != turn_mode:
+        _mismatch("turn mode")
+    if document.get("state") != "accepted":
+        _invalid("turn mode acceptance")
+    return {
+        "client_request_id": client_request_id,
+        "realtime_session_id": session_id,
+        "session_generation": session_generation,
+        "turn_mode": turn_mode,
+        "state": "accepted",
+    }
+
+
 def parse_approval_result(
     document: Mapping[str, Any], *, approval_id: str, client_request_id: str,
 ) -> dict[str, Any]:
@@ -159,7 +235,10 @@ def parse_request_state(
     }
     raw_operation = document.get("operation")
     if raw_operation is not None:
-        if raw_operation not in {"create", "activate", "input", "interrupt", "approval", "delete"}:
+        if raw_operation not in {
+            "create", "activate", "input", "manual_audio_commit",
+            "turn_mode_update", "interrupt", "approval", "delete",
+        }:
             _invalid("request operation")
         if operation is not None and raw_operation != operation:
             _mismatch("request operation")

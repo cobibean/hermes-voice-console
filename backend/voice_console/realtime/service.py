@@ -30,9 +30,11 @@ from .responses import (
     parse_job,
     parse_job_events,
     parse_job_list,
+    parse_manual_audio_commit_result,
     parse_request_state,
     parse_session,
     parse_snapshot,
+    parse_turn_mode_result,
 )
 from .store import RealtimeMappingStore
 
@@ -329,6 +331,105 @@ class RealtimeProxyService:
                                       last_event_id=document["last_event_id"])
         return document
 
+    async def manual_control(
+        self,
+        session_id: str,
+        operation: str,
+        body: Mapping[str, Any],
+        *,
+        target_name: str,
+        auth_context: AuthContext,
+    ) -> dict[str, Any]:
+        if operation not in {"manual_audio_commit", "turn_mode_update"}:
+            raise RealtimeProxyError(
+                "invalid_request", "Unsupported manual control", status=400
+            )
+        _target, client, mapping = self._owned_mapping(
+            session_id, target_name=target_name, auth_context=auth_context
+        )
+        request_id = require_identifier(body, "client_request_id")
+        generation = validate_generation(body.get("session_generation"))
+        forwarded: dict[str, Any] = {
+            "client_request_id": request_id,
+            "conversation_id": mapping["conversation_id"],
+            "session_generation": generation,
+        }
+        turn_mode: str | None = None
+        if operation == "turn_mode_update":
+            turn_mode = require_nonempty_string(body, "turn_mode", maximum=16)
+            if turn_mode not in {"automatic", "manual"}:
+                raise RealtimeProxyError(
+                    "invalid_turn_mode",
+                    "turn_mode must be automatic or manual",
+                    status=400,
+                )
+            forwarded["turn_mode"] = turn_mode
+        claim_state = self.store.claim_request(
+            owner_key=mapping["owner_key"],
+            target_name=target_name,
+            scope_id=session_id,
+            request_id=request_id,
+            operation=operation,
+            payload=forwarded,
+        )
+        if claim_state == "complete":
+            cached = self.store.request_response(
+                owner_key=mapping["owner_key"],
+                target_name=target_name,
+                scope_id=session_id,
+                request_id=request_id,
+            )
+            if cached is not None:
+                return cached
+        if claim_state != "new":
+            raw = await self._lookup_request(
+                client, mapping["conversation_id"], request_id, operation
+            )
+        else:
+            try:
+                raw = await client.manual_control(session_id, operation, forwarded)
+            except AmbiguousRealtimeMutation:
+                raw = await self._lookup_request(
+                    client, mapping["conversation_id"], request_id, operation
+                )
+        pending = parse_request_state(
+            raw, client_request_id=request_id, operation=operation
+        )
+        if pending is not None:
+            self.store.set_request_state(
+                owner_key=mapping["owner_key"],
+                target_name=target_name,
+                scope_id=session_id,
+                request_id=request_id,
+                state=pending["state"],
+                response=pending,
+            )
+            return pending
+        if operation == "manual_audio_commit":
+            result = parse_manual_audio_commit_result(
+                raw,
+                session_id=session_id,
+                session_generation=generation,
+                client_request_id=request_id,
+            )
+        else:
+            assert turn_mode is not None
+            result = parse_turn_mode_result(
+                raw,
+                session_id=session_id,
+                session_generation=generation,
+                client_request_id=request_id,
+                turn_mode=turn_mode,
+            )
+        self.store.complete_request(
+            owner_key=mapping["owner_key"],
+            target_name=target_name,
+            scope_id=session_id,
+            request_id=request_id,
+            response=result,
+        )
+        return result
+
     async def resolve_approval(
         self,
         session_id: str,
@@ -624,6 +725,40 @@ class RealtimeProxyService:
                 raw,
                 approval_id=validate_identifier(str(raw["approval_id"]), "approval_id"),
                 client_request_id=request_id,
+            )
+        elif raw.get("audio_commit_requested") is True:
+            session_id = validate_identifier(
+                str(raw.get("realtime_session_id") or ""), "realtime_session_id"
+            )
+            generation = validate_generation(raw.get("session_generation"))
+            result = parse_manual_audio_commit_result(
+                raw,
+                session_id=session_id,
+                session_generation=generation,
+                client_request_id=request_id,
+            )
+        elif (
+            raw.get("operation") == "manual_audio_commit"
+            and raw.get("state") == "rejected"
+        ):
+            result = parse_manual_audio_commit_result(
+                raw,
+                session_id="rejected",
+                session_generation=1,
+                client_request_id=request_id,
+            )
+        elif raw.get("state") == "accepted" and raw.get("turn_mode") is not None:
+            session_id = validate_identifier(
+                str(raw.get("realtime_session_id") or ""), "realtime_session_id"
+            )
+            generation = validate_generation(raw.get("session_generation"))
+            turn_mode = str(raw.get("turn_mode"))
+            result = parse_turn_mode_result(
+                raw,
+                session_id=session_id,
+                session_generation=generation,
+                client_request_id=request_id,
+                turn_mode=turn_mode,
             )
         elif raw.get("interrupted") is True:
             session_id = validate_identifier(

@@ -31,6 +31,7 @@ def create_fake_hermes_app() -> FastAPI:
     app.state.worker_jobs = {}
     app.state.realtime_overrides = {}
     app.state.realtime_create_payloads = []
+    app.state.realtime_control_calls = {}
 
     def overridden(name: str, document: dict[str, Any]) -> dict[str, Any]:
         return {**document, **(app.state.realtime_overrides.get(name) or {})}
@@ -119,6 +120,8 @@ def create_fake_hermes_app() -> FastAPI:
                 "realtime_session_delete": {"method": "DELETE", "path": "/v1/realtime/sessions/{session_id}"},
                 "realtime_session_activate": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/activate"},
                 "realtime_session_input": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/input"},
+                "realtime_session_manual_audio_commit": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/commit"},
+                "realtime_session_turn_mode_update": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/turn-mode"},
                 "realtime_session_interrupt": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/interrupt"},
                 "realtime_session_events": {"method": "GET", "path": "/v1/realtime/sessions/{session_id}/events"},
                 "realtime_approval": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/approvals/{approval_id}"},
@@ -143,7 +146,7 @@ def create_fake_hermes_app() -> FastAPI:
                     "provider": {"id": "openai", "model": "gpt-realtime-2.1", "voice": "marin", "reasoning_effort": None},
                     "models": ["gpt-realtime-2.1"],
                     "sideband_authority": "server",
-                    "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"]},
+                    "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "manual_audio_commit": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"], "turn_mode_update": True},
                     "events": {"replay": True, "durable": True, "cursor": "event_id", "gap_error": "event_replay_gap"},
                     "tools": {"execution": "server", "direct_allowlist": ["get_status"], "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
                     "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
@@ -387,6 +390,7 @@ def create_fake_hermes_app() -> FastAPI:
             "conversation_id": conversation_id,
             "session_generation": generation,
             "state": "controller_ready",
+            "turn_mode": str(body.get("turn_mode") or "server_vad"),
             "answer_sdp": "v=0\r\na=fake-answer",
         }
         app.state.realtime_sessions[session_id] = result
@@ -486,6 +490,93 @@ def create_fake_hermes_app() -> FastAPI:
         result = overridden("interrupt", {"client_request_id": request_id, "realtime_session_id": session_id, "interrupted": True, "state": "accepted"})
         app.state.realtime_requests[(document["conversation_id"], request_id)] = result
         return result
+
+    async def manual_control_document(
+        session_id: str, request: Request, operation: str
+    ) -> dict[str, Any] | JSONResponse:
+        require_realtime_auth(request)
+        body = await request.json()
+        document = realtime_session(session_id)
+        conversation_id = document["conversation_id"]
+        if body.get("conversation_id") != conversation_id:
+            raise HTTPException(status_code=400, detail="conversation mismatch")
+        request_id = str(body.get("client_request_id") or "")
+        cached = app.state.realtime_requests.get((conversation_id, request_id))
+        if cached is not None:
+            status = 409 if cached.get("state") == "rejected" else 200
+            return JSONResponse(status_code=status, content=cached)
+        unknown = unknown_result(conversation_id, request_id, operation)
+        if unknown is not None:
+            return unknown
+        if body.get("session_generation") != document["session_generation"]:
+            return JSONResponse(
+                status_code=409,
+                content={"error": {"code": f"{operation}_unavailable"}},
+            )
+        if operation == "manual_audio_commit":
+            if document["turn_mode"] != "manual":
+                return JSONResponse(
+                    status_code=409,
+                    content={"error": {"code": "manual_audio_commit_unavailable"}},
+                )
+            key = (operation, session_id)
+            app.state.realtime_control_calls[key] = (
+                app.state.realtime_control_calls.get(key, 0) + 1
+            )
+            if request_id.startswith("empty_"):
+                result = {
+                    "client_request_id": request_id,
+                    "operation": operation,
+                    "state": "rejected",
+                    "accepted": False,
+                    "error": {"code": "audio_buffer_empty"},
+                }
+                app.state.realtime_requests[(conversation_id, request_id)] = result
+                return JSONResponse(status_code=409, content=result)
+            result = {
+                "client_request_id": request_id,
+                "realtime_session_id": session_id,
+                "session_generation": document["session_generation"],
+                "state": "accepted",
+                "audio_commit_requested": True,
+                "response_requested": True,
+            }
+        else:
+            turn_mode = body.get("turn_mode")
+            if turn_mode not in {"automatic", "manual"}:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": {"code": "invalid_turn_mode"}},
+                )
+            key = (operation, session_id)
+            app.state.realtime_control_calls[key] = (
+                app.state.realtime_control_calls.get(key, 0) + 1
+            )
+            document["turn_mode"] = turn_mode
+            result = {
+                "client_request_id": request_id,
+                "realtime_session_id": session_id,
+                "session_generation": document["session_generation"],
+                "turn_mode": turn_mode,
+                "state": "accepted",
+            }
+        result = overridden(operation, result)
+        app.state.realtime_requests[(conversation_id, request_id)] = result
+        if request_id.startswith("ambiguous"):
+            await asyncio.sleep(0.2)
+        return result
+
+    @app.post("/v1/realtime/sessions/{session_id}/commit")
+    async def realtime_commit(session_id: str, request: Request):
+        return await manual_control_document(
+            session_id, request, "manual_audio_commit"
+        )
+
+    @app.post("/v1/realtime/sessions/{session_id}/turn-mode")
+    async def realtime_turn_mode(session_id: str, request: Request):
+        return await manual_control_document(
+            session_id, request, "turn_mode_update"
+        )
 
     @app.get("/v1/realtime/sessions/{session_id}/events")
     async def realtime_event_replay(session_id: str, request: Request, after: str | None = None) -> dict[str, Any]:

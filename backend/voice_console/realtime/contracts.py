@@ -25,6 +25,8 @@ REQUIRED_ENDPOINTS = {
     "/v1/realtime/sessions/{session_id}": "GET|DELETE",
     "/v1/realtime/sessions/{session_id}/activate": "POST",
     "/v1/realtime/sessions/{session_id}/input": "POST",
+    "/v1/realtime/sessions/{session_id}/commit": "POST",
+    "/v1/realtime/sessions/{session_id}/turn-mode": "POST",
     "/v1/realtime/sessions/{session_id}/interrupt": "POST",
     "/v1/realtime/sessions/{session_id}/events": "GET",
     "/v1/realtime/sessions/{session_id}/approvals/{approval_id}": "POST",
@@ -128,7 +130,14 @@ def check_realtime_compatibility(capabilities: Mapping[str, Any]) -> RealtimeCom
     sessions = raw.get("sessions")
     if not isinstance(sessions, Mapping) or not all(
         sessions.get(name) is True
-        for name in ("rotation", "conversation_snapshot", "text_input", "speech_interrupt")
+        for name in (
+            "rotation",
+            "conversation_snapshot",
+            "text_input",
+            "manual_audio_commit",
+            "speech_interrupt",
+            "turn_mode_update",
+        )
     ):
         reasons.append("required Realtime session recovery and control behavior is missing")
     elif not {"server_vad", "manual"}.issubset(set(sessions.get("turn_modes") or [])):
@@ -212,7 +221,10 @@ def _safe_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
     allowed: dict[str, tuple[str, ...]] = {
         "media": ("transport", "bootstrap", "sideband_authority", "create_readiness"),
         "provider": ("id", "model", "voice", "reasoning_effort"),
-        "sessions": ("rotation", "conversation_snapshot", "text_input", "speech_interrupt", "turn_modes"),
+        "sessions": (
+            "rotation", "conversation_snapshot", "text_input", "manual_audio_commit",
+            "speech_interrupt", "turn_modes", "turn_mode_update",
+        ),
         "events": ("replay", "durable", "cursor", "gap_error"),
         "tools": ("execution", "direct_allowlist", "delegation_tool", "raw_delegate_task_exposed"),
         "workers": ("lead_model", "max_concurrency", "max_fanout", "queue", "commands", "ownership", "optimistic_revision", "delivery"),
