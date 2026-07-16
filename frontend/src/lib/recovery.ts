@@ -1,5 +1,13 @@
 const RECOVERY_KEY = 'hvc.recovery.v1';
 const RECOVERY_TTL_MS = 2 * 60 * 60 * 1000;
+const RECOVERY_IDENTIFIER_MAX = 128;
+
+function isBoundedIdentifier(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= RECOVERY_IDENTIFIER_MAX
+    && /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value);
+}
 
 export interface RecoveryMetadata {
   version: 1;
@@ -18,12 +26,15 @@ export function loadRecovery(): RecoveryMetadata | null {
     const value = JSON.parse(raw) as Partial<RecoveryMetadata>;
     if (
       value.version !== 1
-      || typeof value.target !== 'string'
-      || typeof value.conversationId !== 'string'
-      || typeof value.runId !== 'string'
-      || typeof value.lastSequence !== 'number'
+      || !isBoundedIdentifier(value.target)
+      || !isBoundedIdentifier(value.conversationId)
+      || !isBoundedIdentifier(value.runId)
+      || !Number.isSafeInteger(value.lastSequence)
+      || Number(value.lastSequence) < 0
       || typeof value.savedAt !== 'number'
       || typeof value.expiresAt !== 'number'
+      || value.expiresAt - value.savedAt !== RECOVERY_TTL_MS
+      || value.savedAt > Date.now() + 60_000
       || value.expiresAt <= Date.now()
     ) {
       clearRecovery();
@@ -39,6 +50,15 @@ export function loadRecovery(): RecoveryMetadata | null {
 export function saveRecovery(
   value: Omit<RecoveryMetadata, 'version' | 'savedAt' | 'expiresAt'>,
 ): void {
+  if (
+    !isBoundedIdentifier(value.target)
+    || !isBoundedIdentifier(value.conversationId)
+    || !isBoundedIdentifier(value.runId)
+    || !Number.isSafeInteger(value.lastSequence)
+    || value.lastSequence < 0
+  ) {
+    throw new Error('Recovery metadata must contain bounded identifiers and a non-negative cursor');
+  }
   const savedAt = Date.now();
   const metadata: RecoveryMetadata = {
     ...value,
