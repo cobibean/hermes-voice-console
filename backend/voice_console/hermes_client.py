@@ -49,6 +49,8 @@ class Capabilities:
     def public_dict(self) -> dict[str, Any]:
         features = self.raw.get("features") or self.raw.get("capabilities") or {}
         endpoints = self.raw.get("endpoints") or {}
+        contracts = self.raw.get("contracts")
+        safe_contracts = _sanitize_capability_value(contracts) if isinstance(contracts, dict) else {}
         return {
             "features": {
                 str(name): value
@@ -60,7 +62,32 @@ class Capabilities:
             "endpoints": sorted(str(name) for name in endpoints)
             if isinstance(endpoints, dict)
             else [],
+            "contracts": safe_contracts,
         }
+
+    def realtime_compatibility(self):
+        """Return the dedicated rich Realtime compatibility result."""
+        from .realtime.contracts import check_realtime_compatibility
+
+        return check_realtime_compatibility(self.raw)
+
+
+def _sanitize_capability_value(value: Any, *, depth: int = 0) -> Any:
+    """Preserve behavioral contracts without ever reflecting credential-like fields."""
+    if depth > 6:
+        return None
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_capability_value(item, depth=depth + 1)
+            for key, item in value.items()
+            if isinstance(key, str)
+            and not any(token in key.lower() for token in ("secret", "token", "credential", "key"))
+        }
+    if isinstance(value, list):
+        return [_sanitize_capability_value(item, depth=depth + 1) for item in value[:100]]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)[:200]
 
 
 class HermesApiClient:

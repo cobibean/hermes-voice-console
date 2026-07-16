@@ -27,6 +27,7 @@ from .providers import (
     make_stt_provider,
     make_tts_provider,
 )
+from .realtime import RealtimeProxyService, create_realtime_router
 from .run_coordinator import RunCoordinator
 from .run_store import ConsoleStore
 from .session_manager import SessionManager
@@ -44,6 +45,7 @@ class ConsoleState:
     store: ConsoleStore
     sessions: SessionManager
     runs: RunCoordinator
+    realtime: RealtimeProxyService
 
 
 def create_app(
@@ -79,6 +81,11 @@ def create_app(
         max_events=config.server.max_run_events,
         terminal_retention_seconds=config.server.terminal_retention_seconds,
     )
+    realtime = RealtimeProxyService(
+        targets=targets,
+        sessions=sessions,
+        request_timeout_seconds=config.server.request_timeout_seconds,
+    )
     state = ConsoleState(
         config=config,
         targets=targets,
@@ -89,6 +96,7 @@ def create_app(
         store=store,
         sessions=sessions,
         runs=runs,
+        realtime=realtime,
     )
 
     @asynccontextmanager
@@ -102,6 +110,7 @@ def create_app(
 
     app = FastAPI(title="Hermes Voice Console", version="0.1.0", lifespan=lifespan)
     app.state.console_state = state
+    app.include_router(create_realtime_router(state.realtime, state.auth))
 
     @app.middleware("http")
     async def exposure_guard(request: Request, call_next):

@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 API_KEY = "fake"
 
@@ -24,6 +24,11 @@ def create_fake_hermes_app() -> FastAPI:
     app.state.run_payloads = []
     app.state.sessions = {}
     app.state.stopped_runs = set()
+    app.state.realtime_sessions = {}
+    app.state.realtime_by_conversation = {}
+    app.state.realtime_requests = {}
+    app.state.realtime_events = {}
+    app.state.worker_jobs = {}
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -72,6 +77,13 @@ def create_fake_hermes_app() -> FastAPI:
                 "session_resources": True,
                 "session_chat": True,
                 "session_chat_streaming": True,
+                "realtime_voice": True,
+                "realtime_sideband_tools": True,
+                "realtime_conversation_snapshot": True,
+                "realtime_durable_event_replay": True,
+                "realtime_worker_jobs": True,
+                "realtime_worker_job_commands": True,
+                "realtime_exactly_once_worker_projection": True,
             },
             "endpoints": {
                 "runs": {"method": "POST", "path": "/v1/runs"},
@@ -83,6 +95,51 @@ def create_fake_hermes_app() -> FastAPI:
                     "method": "GET",
                     "path": "/api/sessions/{session_id}/messages",
                 },
+                "realtime_session_create": {"method": "POST", "path": "/v1/realtime/sessions"},
+                "realtime_session": {"method": "GET", "path": "/v1/realtime/sessions/{session_id}"},
+                "realtime_session_delete": {"method": "DELETE", "path": "/v1/realtime/sessions/{session_id}"},
+                "realtime_session_activate": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/activate"},
+                "realtime_session_input": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/input"},
+                "realtime_session_interrupt": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/interrupt"},
+                "realtime_session_events": {"method": "GET", "path": "/v1/realtime/sessions/{session_id}/events"},
+                "realtime_approval": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/approvals/{approval_id}"},
+                "realtime_conversation": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}"},
+                "realtime_worker_jobs": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs"},
+                "realtime_worker_job": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}"},
+                "realtime_worker_job_events": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/events"},
+                "realtime_worker_job_refine": {"method": "POST", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/refine"},
+                "realtime_worker_job_redirect": {"method": "POST", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/redirect"},
+                "realtime_worker_job_cancel": {"method": "POST", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/cancel"},
+            },
+            "contracts": {
+                "realtime": {
+                    "version": "1.0",
+                    "media": {
+                        "transport": "webrtc",
+                        "bootstrap": "unified_sdp",
+                        "sideband_authority": "server",
+                        "create_readiness": "controller_ready",
+                    },
+                    "provider": {"id": "openai", "model": "gpt-realtime-2.1", "models": ["gpt-realtime-2.1"], "voice": "marin", "reasoning_effort": None},
+                    "models": ["gpt-realtime-2.1"],
+                    "sideband_authority": "server",
+                    "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"]},
+                    "events": {"replay": True, "durable": True, "cursor": "event_id", "gap_error": "event_replay_gap"},
+                    "tools": {"execution": "hermes", "direct_allowlist": True, "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
+                    "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
+                    "approvals": {"server_authoritative": True, "choices": ["once", "deny"]},
+                    "routing_policy": {"persona_model": "gpt-realtime-2.1", "substantial_work": "delegate", "default_fanout": 1, "confirmation": "announce_without_confirmation"},
+                    "behaviors": {
+                        "server_controlled_webrtc": True,
+                        "hermes_tool_dispatch": True,
+                        "persona_context": True,
+                        "approval_enforcement": True,
+                        "durable_worker_jobs": True,
+                        "conversation_recovery": True,
+                        "replayable_events": True,
+                        "speech_interrupt": True,
+                    },
+                }
             },
         }
 
@@ -276,5 +333,174 @@ def create_fake_hermes_app() -> FastAPI:
         app.state.stopped_runs.add(run_id)
         app.state.run_status[run_id]["status"] = "cancelled"
         return {"run_id": run_id, "status": "stopping"}
+
+    def require_realtime_auth(request: Request) -> None:
+        if not _auth_ok(request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+    def realtime_session(session_id: str) -> dict[str, Any]:
+        value = app.state.realtime_sessions.get(session_id)
+        if value is None:
+            raise HTTPException(status_code=404, detail="Realtime session not found")
+        return value
+
+    @app.post("/v1/realtime/sessions", status_code=201)
+    async def realtime_create(request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        body = await request.json()
+        conversation_id = str(body.get("conversation_id") or "")
+        request_id = str(body.get("client_request_id") or "")
+        offer = str(body.get("sdp_offer") or "")
+        if not conversation_id or not request_id or not offer:
+            raise HTTPException(status_code=400, detail="Missing Realtime session field")
+        request_key = (conversation_id, request_id)
+        cached = app.state.realtime_requests.get(request_key)
+        if cached is not None:
+            return cached
+        old_id = app.state.realtime_by_conversation.get(conversation_id)
+        generation = (
+            int(app.state.realtime_sessions[old_id]["session_generation"]) + 1
+            if old_id in app.state.realtime_sessions
+            else 1
+        )
+        session_id = f"rt_{uuid.uuid4().hex}"
+        result = {
+            "contract_version": "1.0",
+            "realtime_session_id": session_id,
+            "conversation_id": conversation_id,
+            "session_generation": generation,
+            "state": "controller_ready",
+            "answer_sdp": "v=0\r\na=fake-answer",
+        }
+        app.state.realtime_sessions[session_id] = result
+        app.state.realtime_by_conversation[conversation_id] = session_id
+        app.state.realtime_requests[request_key] = result
+        app.state.realtime_events[conversation_id] = [
+            {"event_id": "ev_1", "type": "session.created", "conversation_id": conversation_id, "payload": {"realtime_session_id": session_id}},
+            {"event_id": "ev_2", "type": "approval.pending", "conversation_id": conversation_id, "payload": {"approval_id": "approval_1"}},
+            {"event_id": "ev_3", "type": "worker.queued", "conversation_id": conversation_id, "payload": {"worker_job_id": "job_1"}},
+        ]
+        app.state.worker_jobs.setdefault(
+            conversation_id,
+            {"job_1": {"worker_job_id": "job_1", "conversation_key": conversation_id, "status": "running", "revision": 1, "commands": [], "events": [{"event_id": 1, "type": "worker.queued"}]}},
+        )
+        if request_id.startswith("ambiguous"):
+            await asyncio.sleep(0.2)
+        return result
+
+    @app.get("/v1/realtime/sessions/{session_id}")
+    async def realtime_get(session_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        return realtime_session(session_id)
+
+    @app.delete("/v1/realtime/sessions/{session_id}")
+    async def realtime_delete(session_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        document = realtime_session(session_id)
+        document["state"] = "closed"
+        return {"realtime_session_id": session_id, "conversation_id": document["conversation_id"], "state": "closed"}
+
+    @app.post("/v1/realtime/sessions/{session_id}/activate")
+    async def realtime_activate(session_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        body = await request.json()
+        document = realtime_session(session_id)
+        if body.get("session_generation") != document["session_generation"]:
+            raise HTTPException(status_code=409, detail="stale generation")
+        document["state"] = "active"
+        return document
+
+    @app.post("/v1/realtime/sessions/{session_id}/input")
+    async def realtime_input(session_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        body = await request.json()
+        realtime_session(session_id)
+        return {"client_request_id": body.get("client_request_id"), "accepted": True}
+
+    @app.post("/v1/realtime/sessions/{session_id}/interrupt")
+    async def realtime_interrupt(session_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        realtime_session(session_id)
+        return {"realtime_session_id": session_id, "interrupted": True}
+
+    @app.get("/v1/realtime/sessions/{session_id}/events")
+    async def realtime_event_replay(session_id: str, request: Request, after: str | None = None) -> dict[str, Any]:
+        require_realtime_auth(request)
+        document = realtime_session(session_id)
+        events = app.state.realtime_events[document["conversation_id"]]
+        if after and after not in {event["event_id"] for event in events}:
+            return JSONResponse(status_code=409, content={"error": {"code": "event_replay_gap", "message": "Requested events are no longer retained", "details": {"oldest_event_id": events[0]["event_id"]}}})
+        start = next((index + 1 for index, event in enumerate(events) if event["event_id"] == after), 0)
+        selected = events[start:]
+        return {"conversation_id": document["conversation_id"], "events": selected, "last_event_id": selected[-1]["event_id"] if selected else after}
+
+    @app.post("/v1/realtime/sessions/{session_id}/approvals/{approval_id}")
+    async def realtime_approval(session_id: str, approval_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        body = await request.json()
+        realtime_session(session_id)
+        return {"approval_id": approval_id, "state": "resolved", "accepted": body.get("choice")}
+
+    @app.get("/v1/realtime/conversations/{conversation_id}")
+    async def realtime_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        session_id = app.state.realtime_by_conversation.get(conversation_id)
+        return {
+            "contract_version": "1.0",
+            "conversation_id": conversation_id,
+            "session": app.state.realtime_sessions.get(session_id),
+            "pending_approvals": [{"approval_id": "approval_1", "state": "pending"}],
+            "worker_jobs": list(app.state.worker_jobs.get(conversation_id, {}).values()),
+            "last_event_id": "ev_3",
+        }
+
+    worker_path = "/v1/realtime/conversations/{conversation_id}/worker-jobs"
+
+    @app.get(worker_path)
+    async def realtime_worker_jobs(conversation_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        return {"object": "list", "data": list(app.state.worker_jobs.get(conversation_id, {}).values())}
+
+    @app.get(worker_path + "/{worker_job_id}")
+    async def realtime_worker_job(conversation_id: str, worker_job_id: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        job = app.state.worker_jobs.get(conversation_id, {}).get(worker_job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Worker job not found")
+        return job
+
+    @app.get(worker_path + "/{worker_job_id}/events")
+    async def realtime_worker_events(conversation_id: str, worker_job_id: str, request: Request, after: int = 0) -> dict[str, Any]:
+        require_realtime_auth(request)
+        job = app.state.worker_jobs.get(conversation_id, {}).get(worker_job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Worker job not found")
+        events = [item for item in job["events"] if item["event_id"] > after]
+        return {"worker_job_id": worker_job_id, "events": events, "last_event_id": events[-1]["event_id"] if events else after}
+
+    async def worker_command(conversation_id: str, worker_job_id: str, operation: str, request: Request) -> dict[str, Any]:
+        require_realtime_auth(request)
+        body = await request.json()
+        job = app.state.worker_jobs.get(conversation_id, {}).get(worker_job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Worker job not found")
+        command_id = body.get("command_id")
+        existing = next((item for item in job["commands"] if item["command_id"] == command_id), None)
+        if existing is not None:
+            return existing
+        if body.get("expected_revision") != job["revision"]:
+            raise HTTPException(status_code=409, detail="revision conflict")
+        job["revision"] += 1
+        result = {"command_id": command_id, "operation": operation, "accepted": True, "resulting_revision": job["revision"]}
+        job["commands"].append(result)
+        if str(command_id).startswith("ambiguous"):
+            await asyncio.sleep(0.2)
+        return result
+
+    for operation in ("refine", "redirect", "cancel"):
+        async def handler(conversation_id: str, worker_job_id: str, request: Request, op: str = operation):
+            return await worker_command(conversation_id, worker_job_id, op, request)
+
+        app.add_api_route(worker_path + f"/{{worker_job_id}}/{operation}", handler, methods=["POST"])
 
     return app

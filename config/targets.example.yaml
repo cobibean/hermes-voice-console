@@ -5,6 +5,8 @@ targets:
     api_key_env: "KNWLDG_API_SERVER_KEY"
     default_session_key: "voice-console:knwldg"
     preferred_transport: "runs"
+    # Realtime is target-scoped and fail-closed until the target advertises contract major 1.
+    realtime_enabled: false
     voice:
       tts_voice: "default"
 

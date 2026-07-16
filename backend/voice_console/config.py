@@ -183,6 +183,7 @@ class TargetConfig:
     configured_model_label: str | None = None
     memory_scope_prefix: str = "voice-console"
     fixed_memory_session_key: str | None = None
+    realtime_enabled: bool = False
     voice: TargetVoiceConfig = field(default_factory=TargetVoiceConfig)
 
     @property
@@ -201,6 +202,7 @@ class TargetConfig:
             "api_key_configured": self.api_key_present,
             "configured_provider_label": self.configured_provider_label,
             "configured_model_label": self.configured_model_label,
+            "realtime_enabled": self.realtime_enabled,
             "voice": {"tts_voice": self.voice.tts_voice},
         }
 
@@ -391,6 +393,7 @@ def load_targets_config(path: str | Path) -> TargetsConfig:
                 if item.get("fixed_memory_session_key")
                 else None
             ),
+            realtime_enabled=_bool(item.get("realtime_enabled"), False),
             voice=TargetVoiceConfig(tts_voice=str(voice_raw.get("tts_voice") or "default")),
         )
     return TargetsConfig(targets=targets)
