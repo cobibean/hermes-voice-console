@@ -97,16 +97,13 @@ def parse_delete_result(
 
 
 def parse_input_result(
-    document: Mapping[str, Any], *, session_id: str, client_request_id: str,
+    document: Mapping[str, Any], *, client_request_id: str,
 ) -> dict[str, Any]:
     parse_request_state(document, client_request_id=client_request_id, operation="input")
-    if _id(document, "realtime_session_id") != session_id:
-        _mismatch("session")
     if document.get("accepted") is not True or document.get("state") != "accepted":
         _invalid("input acceptance")
     return {
         "client_request_id": client_request_id,
-        "realtime_session_id": session_id,
         "accepted": True,
         "state": "accepted",
     }

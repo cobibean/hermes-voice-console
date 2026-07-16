@@ -447,17 +447,7 @@ def create_fake_hermes_app() -> FastAPI:
         if unknown is not None:
             return unknown
         document["state"] = "active"
-        result = overridden(
-            "activate",
-            {
-                "contract_version": document["contract_version"],
-                "client_request_id": request_id,
-                "realtime_session_id": session_id,
-                "conversation_id": document["conversation_id"],
-                "session_generation": document["session_generation"],
-                "state": "active",
-            },
-        )
+        result = overridden("activate", {**document, "client_request_id": request_id})
         app.state.realtime_requests[(document["conversation_id"], request_id)] = result
         return result
 
@@ -475,7 +465,7 @@ def create_fake_hermes_app() -> FastAPI:
         unknown = unknown_result(document["conversation_id"], request_id, "input")
         if unknown is not None:
             return unknown
-        result = overridden("input", {"client_request_id": request_id, "realtime_session_id": session_id, "accepted": True, "state": "accepted"})
+        result = overridden("input", {"client_request_id": request_id, "accepted": True, "state": "accepted"})
         app.state.realtime_requests[(document["conversation_id"], request_id)] = result
         return result
 

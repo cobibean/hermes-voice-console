@@ -296,9 +296,7 @@ class RealtimeProxyService:
             )
             self.store.update_session(session_id, state=result["state"])
         elif action == "input":
-            result = parse_input_result(
-                raw, session_id=session_id, client_request_id=request_id
-            )
+            result = parse_input_result(raw, client_request_id=request_id)
         else:
             result = parse_interrupt_result(
                 raw, session_id=session_id, client_request_id=request_id
@@ -635,12 +633,7 @@ class RealtimeProxyService:
                 raw, session_id=session_id, client_request_id=request_id
             )
         elif raw.get("accepted") is True:
-            session_id = validate_identifier(
-                str(raw.get("realtime_session_id") or ""), "realtime_session_id"
-            )
-            result = parse_input_result(
-                raw, session_id=session_id, client_request_id=request_id
-            )
+            result = parse_input_result(raw, client_request_id=request_id)
         elif raw.get("realtime_session_id") and raw.get("session_generation"):
             session_id = validate_identifier(
                 str(raw["realtime_session_id"]), "realtime_session_id"

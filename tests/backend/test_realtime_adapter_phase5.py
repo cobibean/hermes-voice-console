@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import time
@@ -108,6 +109,120 @@ def create_realtime(client: TestClient, conversation_id: str, request_id: str = 
             # Must be ignored; the backend derives its own pseudonymous value.
             "safety_identifier": "browser-controlled-value",
         },
+    )
+
+
+def assert_phase4_shape(document: dict, shape: dict) -> None:
+    assert set(document) == set(shape["keys"])
+    expected_types = {
+        "string": str,
+        "integer": int,
+        "boolean": bool,
+    }
+    for key, type_name in shape["types"].items():
+        assert type(document[key]) is expected_types[type_name]
+    for key, value in shape.get("constants", {}).items():
+        assert document[key] == value
+
+
+def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
+    client, app, conversation_id = console
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "hermes_realtime_phase4_mutation_shapes.json"
+        ).read_text()
+    )
+    assert fixture["source_commit"] == "9e4ea6935f71c38bf598d930978e9ea2526136a8"
+    shapes = fixture["mutations"]
+    fake = app.state.fake_hermes_app
+
+    session = create_realtime(client, conversation_id, "shape_create_1").json()
+    session_id = session["realtime_session_id"]
+    generation = session["session_generation"]
+    assert_phase4_shape(
+        fake.state.realtime_requests[(conversation_id, "shape_create_1")],
+        shapes["create"],
+    )
+
+    mutations = [
+        (
+            "activate",
+            "shape_activate_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/activate?target=fake",
+                json={
+                    "client_request_id": "shape_activate_1",
+                    "session_generation": generation,
+                },
+            ),
+        ),
+        (
+            "input",
+            "shape_input_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/input?target=fake",
+                json={
+                    "client_request_id": "shape_input_1",
+                    "session_generation": generation,
+                    "text": "continue",
+                },
+            ),
+        ),
+        (
+            "interrupt",
+            "shape_interrupt_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/interrupt?target=fake",
+                json={
+                    "client_request_id": "shape_interrupt_1",
+                    "session_generation": generation,
+                },
+            ),
+        ),
+        (
+            "approval",
+            "shape_approval_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/approvals/approval_1?target=fake",
+                json={
+                    "client_request_id": "shape_approval_1",
+                    "session_generation": generation,
+                    "choice": "once",
+                },
+            ),
+        ),
+    ]
+    for operation, request_id, response in mutations:
+        assert response.status_code == 200
+        assert_phase4_shape(
+            fake.state.realtime_requests[(conversation_id, request_id)],
+            shapes[operation],
+        )
+
+    unknown = client.post(
+        f"/api/realtime/sessions/{session_id}/interrupt?target=fake",
+        json={
+            "client_request_id": "unknown_shape_1",
+            "session_generation": generation,
+        },
+    )
+    assert unknown.status_code == 202
+    assert_phase4_shape(
+        fake.state.realtime_requests[(conversation_id, "unknown_shape_1")],
+        shapes["outcome_unknown"],
+    )
+
+    deleted = client.request(
+        "DELETE",
+        f"/api/realtime/sessions/{session_id}?target=fake",
+        json={"client_request_id": "shape_delete_1"},
+    )
+    assert deleted.status_code == 200
+    assert_phase4_shape(
+        fake.state.realtime_requests[(conversation_id, "shape_delete_1")],
+        shapes["delete"],
     )
 
 

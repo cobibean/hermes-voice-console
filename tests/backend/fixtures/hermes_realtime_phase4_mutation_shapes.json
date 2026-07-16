@@ -1,0 +1,42 @@
+{
+  "source_repository": "hermes-agent-realtime",
+  "source_commit": "9e4ea6935f71c38bf598d930978e9ea2526136a8",
+  "source_files": ["gateway/realtime/api.py", "gateway/realtime/contracts.py"],
+  "contract_version": "1.0",
+  "mutations": {
+    "create": {
+      "keys": ["contract_version", "realtime_session_id", "conversation_id", "session_generation", "state", "answer_sdp", "client_request_id"],
+      "types": {"contract_version": "string", "realtime_session_id": "string", "conversation_id": "string", "session_generation": "integer", "state": "string", "answer_sdp": "string", "client_request_id": "string"}
+    },
+    "activate": {
+      "keys": ["contract_version", "realtime_session_id", "conversation_id", "session_generation", "state", "answer_sdp", "client_request_id"],
+      "types": {"contract_version": "string", "realtime_session_id": "string", "conversation_id": "string", "session_generation": "integer", "state": "string", "answer_sdp": "string", "client_request_id": "string"},
+      "constants": {"state": "active"}
+    },
+    "input": {
+      "keys": ["client_request_id", "accepted", "state"],
+      "types": {"client_request_id": "string", "accepted": "boolean", "state": "string"},
+      "constants": {"accepted": true, "state": "accepted"}
+    },
+    "interrupt": {
+      "keys": ["client_request_id", "realtime_session_id", "interrupted", "state"],
+      "types": {"client_request_id": "string", "realtime_session_id": "string", "interrupted": "boolean", "state": "string"},
+      "constants": {"interrupted": true, "state": "accepted"}
+    },
+    "approval": {
+      "keys": ["client_request_id", "approval_id", "state", "accepted"],
+      "types": {"client_request_id": "string", "approval_id": "string", "state": "string", "accepted": "boolean"},
+      "constants": {"state": "resolved"}
+    },
+    "delete": {
+      "keys": ["client_request_id", "realtime_session_id", "conversation_id", "state"],
+      "types": {"client_request_id": "string", "realtime_session_id": "string", "conversation_id": "string", "state": "string"},
+      "constants": {"state": "closed"}
+    },
+    "outcome_unknown": {
+      "keys": ["client_request_id", "operation", "state", "accepted"],
+      "types": {"client_request_id": "string", "operation": "string", "state": "string", "accepted": "boolean"},
+      "constants": {"state": "outcome_unknown", "accepted": false}
+    }
+  }
+}
