@@ -124,7 +124,11 @@ export class RealtimeControlClient {
           return;
         }
         if (frame.type === 'subscribed') {
-          if (!this.snapshotReceived) { fail(new Error('Realtime control subscribed without an authoritative snapshot')); return; }
+          if (!this.snapshotReceived) {
+            fail(new Error('Realtime control subscribed without an authoritative snapshot'));
+            socket.close();
+            return;
+          }
           this.cursor = frame.after;
           this.options.onState?.('ready');
           if (!settled) { settled = true; resolve(); }
@@ -163,7 +167,10 @@ export class RealtimeControlClient {
           this.options.onError?.(frame.message);
           this.options.onState?.('degraded');
           this.rejectCommands(new Error(frame.message));
-          if (!settled) fail(new Error(frame.message));
+          if (!settled) {
+            fail(new Error(frame.message));
+            socket.close();
+          }
         }
       });
       socket.addEventListener('close', () => {
@@ -209,9 +216,14 @@ export class RealtimeControlClient {
     if (kind === 'interrupt' && (result.interrupted !== true || result.state !== 'accepted' || result.realtime_session_id !== this.options.sessionId)) throw new Error('Hermes rejected the speech interruption');
     if (kind === 'approval' && (typeof result.accepted !== 'boolean' || !['resolved', 'denied'].includes(String(result.state)) || result.approval_id !== command.approval_id)) throw new Error('Hermes returned an invalid approval acknowledgement');
     if (kind === 'worker') {
-      if (typeof result.resulting_revision !== 'number' || !Number.isInteger(result.resulting_revision)) throw new Error('Hermes returned an invalid worker revision');
-      if (result.operation !== command.operation || (result.worker_job_id !== undefined && result.worker_job_id !== command.worker_job_id)) throw new Error('Hermes returned a mismatched worker acknowledgement');
-      if (result.accepted !== true || result.acknowledgement === 'rejected') throw new Error('Hermes rejected the worker command');
+      const acknowledgements = new Set([
+        'applied', 'already_applied', 'rejected_wrong_owner', 'rejected_terminal',
+        'rejected_stale_revision', 'rejected_no_steering', 'rejected_not_signaled',
+        'rejected_not_terminal', 'rejected_unclaimed',
+      ]);
+      if (typeof result.revision !== 'number' || !Number.isInteger(result.revision) || result.revision < 0) throw new Error('Hermes returned an invalid worker revision');
+      if (typeof result.control_signal_sent !== 'boolean' || !acknowledgements.has(String(result.acknowledgement))) throw new Error('Hermes returned an invalid worker acknowledgement');
+      if (result.operation !== command.operation || result.worker_job_id !== command.worker_job_id) throw new Error('Hermes returned a mismatched worker acknowledgement');
     }
     return result;
   }

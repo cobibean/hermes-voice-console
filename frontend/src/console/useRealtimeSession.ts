@@ -53,6 +53,7 @@ export interface RealtimeSessionController {
   sendInput: (text: string) => Promise<void>;
   interruptSpeech: () => Promise<void>;
   resolveApproval: (approvalId: string, choice: string) => Promise<void>;
+  submittingApprovalId: string | null;
   workerCommand: (workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload?: Record<string, unknown>) => Promise<void>;
 }
 
@@ -82,6 +83,7 @@ export function useRealtimeSession({
   const [muted, setMutedState] = useState(false);
   const [suspended, setSuspended] = useState(false);
   const [turnMode, setTurnMode] = useState<RealtimeTurnMode>('server_vad');
+  const [submittingApprovalId, setSubmittingApprovalId] = useState<string | null>(null);
   const [projection, dispatchProjection] = useReducer(
     (current: RealtimeConversationProjection, action: { type: 'reset' } | { type: 'snapshot'; value: Parameters<typeof projectRealtimeSnapshot>[0] } | { type: 'event'; value: Parameters<typeof projectRealtimeEvent>[1] } | { type: 'worker.revision'; jobId: string; revision: number }) => {
       if (action.type === 'reset') return emptyRealtimeProjection;
@@ -104,6 +106,11 @@ export function useRealtimeSession({
   const mutedRef = useRef(false);
   const identity = `${target}|${conversationId}`;
   const projectionIdentityRef = useRef(identity);
+  const approvalRequestRef = useRef<{
+    approvalId: string;
+    clientRequestId: string;
+    promise: Promise<void>;
+  } | null>(null);
 
   const teardown = useCallback(() => {
     connectRef.current = null;
@@ -224,6 +231,15 @@ export function useRealtimeSession({
     dispatchProjection({ type: 'reset' });
   }, [identity]);
 
+  useEffect(() => {
+    if (!submittingApprovalId) return;
+    const approval = projection.approvals[submittingApprovalId];
+    if (!approval || !['pending', 'resolving'].includes(String(approval.state))) {
+      approvalRequestRef.current = null;
+      setSubmittingApprovalId(null);
+    }
+  }, [projection.approvals, submittingApprovalId]);
+
   const close = useCallback(() => {
     setSuspended(true);
     teardown();
@@ -259,14 +275,34 @@ export function useRealtimeSession({
     const { control, session } = requireControl();
     await control.interrupt(realtimeRequestId('interrupt'), session.session_generation);
   }, [requireControl]);
-  const resolveApproval = useCallback(async (approvalId: string, choice: string) => {
+  const resolveApproval = useCallback((approvalId: string, choice: string): Promise<void> => {
     const { control, session } = requireControl();
-    await control.approval(realtimeRequestId('approval'), approvalId, choice, session.session_generation);
+    const existing = approvalRequestRef.current;
+    if (existing) {
+      if (existing.approvalId === approvalId) return existing.promise;
+      return Promise.reject(new Error('Another Hermes approval is already being submitted'));
+    }
+    const clientRequestId = realtimeRequestId('approval');
+    setSubmittingApprovalId(approvalId);
+    const promise = control.approval(clientRequestId, approvalId, choice, session.session_generation)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        if (approvalRequestRef.current?.clientRequestId === clientRequestId) {
+          approvalRequestRef.current = null;
+          setSubmittingApprovalId(null);
+        }
+        throw error;
+      });
+    approvalRequestRef.current = { approvalId, clientRequestId, promise };
+    return promise;
   }, [requireControl]);
   const workerCommand = useCallback(async (workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload: Record<string, unknown> = {}) => {
     const { control } = requireControl();
     const result = await control.workerCommand(realtimeRequestId('worker'), workerJobId, operation, revision, payload);
-    dispatchProjection({ type: 'worker.revision', jobId: workerJobId, revision: result.resulting_revision });
+    dispatchProjection({ type: 'worker.revision', jobId: workerJobId, revision: result.revision });
+    if (result.acknowledgement.startsWith('rejected_')) {
+      throw new Error(`Hermes rejected ${operation}: ${result.acknowledgement.replaceAll('_', ' ')} (revision ${result.revision})`);
+    }
   }, [requireControl]);
 
   const state = useMemo<RealtimeSessionState>(() => {
@@ -301,6 +337,7 @@ export function useRealtimeSession({
     sendInput,
     interruptSpeech,
     resolveApproval,
+    submittingApprovalId,
     workerCommand,
-  }), [close, compatibility, connect, controlState, identity, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, turnMode, workerCommand, interruptSpeech]);
+  }), [close, compatibility, connect, controlState, identity, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, submittingApprovalId, turnMode, workerCommand, interruptSpeech]);
 }

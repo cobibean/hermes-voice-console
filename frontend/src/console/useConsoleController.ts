@@ -11,7 +11,7 @@ import { voiceDiagnostic } from '../lib/diagnostics';
 import type { VoiceTransport } from '../lib/realtimeTypes';
 import { useLegacyVoiceSession } from './useLegacyVoiceSession';
 import { useRealtimeSession } from './useRealtimeSession';
-import { presentRealtimeJobs, realtimeReadiness, workerControlPayload } from './buildRealtimePresentation';
+import { describeRealtimeApproval, presentRealtimeJobs, realtimeReadiness, workerControlPayload } from './buildRealtimePresentation';
 import type { RealtimePresentationModel } from './realtimePresentation';
 import { mergeConversationMessages } from './conversationProjection';
 
@@ -130,6 +130,8 @@ export function useConsoleController({
   const lastSequenceRef = useRef(0);
   const pendingTextTurnRef = useRef<{ turnId: string; text: string } | null>(null);
   const feedSequenceRef = useRef(0);
+  const conversationIdentity = `${selectedTarget}|${sessionKey}`;
+  const historyIdentityRef = useRef('');
   const selectedTargetConfig = bootstrap?.targets.find((target) => target.name === selectedTarget);
   const recovery = loadRecovery();
   const dispatchError = useCallback((message: string) => dispatch({ type: 'error', message }), []);
@@ -192,6 +194,7 @@ export function useConsoleController({
     void loadSessionMessages(sessionKey, selectedTarget, getToken)
       .then((history) => {
         if (!active) return;
+        historyIdentityRef.current = `${selectedTarget}|${sessionKey}`;
         setMessages(history);
         voiceDiagnostic('history.loaded', {
           target: selectedTarget,
@@ -230,11 +233,13 @@ export function useConsoleController({
     dispatch({ type: 'event', event });
     if (event.type === 'recording.started') activeTurnIdRef.current = event.turn_id;
     if (event.type === 'transcript.final') {
+      historyIdentityRef.current = conversationIdentity;
       setTranscript(event.text);
       setMessages((current) => [...current, { role: 'user', content: event.text }]);
       setResponse('');
     }
     if (event.type === 'text.accepted' && pendingTextTurnRef.current?.turnId === event.turn_id) {
+      historyIdentityRef.current = conversationIdentity;
       setMessages((current) => [...current, { role: 'user', content: pendingTextTurnRef.current!.text }]);
       setResponse('');
     }
@@ -256,6 +261,7 @@ export function useConsoleController({
     }
     if (event.type === 'agent.delta') setResponse((previous) => previous + event.delta);
     if (event.type === 'agent.tool.started') {
+      historyIdentityRef.current = conversationIdentity;
       feedSequenceRef.current += 1;
       const id = `tool-${event.run_id}-${feedSequenceRef.current}`;
       setMessages((current) => [...current, {
@@ -268,6 +274,7 @@ export function useConsoleController({
       }]);
     }
     if (event.type === 'agent.tool.completed') {
+      historyIdentityRef.current = conversationIdentity;
       setMessages((current) => {
         const next = [...current];
         let index = -1;
@@ -305,6 +312,7 @@ export function useConsoleController({
       });
     }
     if (event.type === 'agent.completed') {
+      historyIdentityRef.current = conversationIdentity;
       setMessages((current) => [...current, { role: 'assistant', content: event.text }]);
       setResponse('');
     }
@@ -351,7 +359,7 @@ export function useConsoleController({
       clearRecovery();
     }
     legacySession.handlePlaybackEvent(event);
-  }, [appendEvent, legacySession.handlePlaybackEvent, selectedTarget, sessionKey]);
+  }, [appendEvent, conversationIdentity, legacySession.handlePlaybackEvent, selectedTarget, sessionKey]);
   handleEventRef.current = handleEvent;
 
   const connect = useCallback(async () => {
@@ -406,6 +414,7 @@ export function useConsoleController({
       if (transport === 'realtime') {
         await realtimeSession.connect();
         await realtimeSession.sendInput(text);
+        historyIdentityRef.current = conversationIdentity;
         setMessages((current) => [...current, { role: 'user', content: text }]);
         setTextDraft('');
         pendingTextTurnRef.current = null;
@@ -417,7 +426,7 @@ export function useConsoleController({
       pendingTextTurnRef.current = null;
       dispatch({ type: 'error', message: (error as Error).message });
     }
-  }, [legacySession.connect, realtimeSession.connect, realtimeSession.sendInput, textDraft, transport]);
+  }, [conversationIdentity, legacySession.connect, realtimeSession.connect, realtimeSession.sendInput, textDraft, transport]);
 
   const stopRecording = useCallback(() => {
     const turnId = activeTurnIdRef.current ?? state.activeTurnId;
@@ -481,12 +490,12 @@ export function useConsoleController({
     if (!pending || typeof pending.approval_id !== 'string') return null;
     return {
       runId: pending.approval_id,
-      message: typeof pending.message === 'string' ? pending.message : 'Hermes needs approval to continue.',
+      message: describeRealtimeApproval(pending, realtimeSession.projection.toolCalls),
       choices: approvalChoices(pending),
       payload: pending,
-      submitting: pending.state === 'resolving',
+      submitting: pending.state === 'resolving' || realtimeSession.submittingApprovalId === pending.approval_id,
     };
-  }, [realtimeSession.projection.approvals]);
+  }, [realtimeSession.projection.approvals, realtimeSession.projection.toolCalls, realtimeSession.submittingApprovalId]);
 
   const resolveApproval = useCallback((decision: ApprovalDecision) => {
     if (transport === 'realtime') {
@@ -548,9 +557,10 @@ export function useConsoleController({
   const inputLevel = transport === 'realtime' ? 0 : legacySession.inputLevel;
   const recordingElapsed = transport === 'realtime' ? 0 : legacySession.recordingElapsed;
   const speechFallbackAvailable = transport === 'legacy' && legacySession.speechFallbackAvailable;
+  const identityBoundHistory = historyIdentityRef.current === conversationIdentity ? messages : [];
   const projectedMessages = transport === 'realtime'
-    ? mergeConversationMessages(messages, realtimeSession.projection.messages)
-    : messages;
+    ? mergeConversationMessages(identityBoundHistory, realtimeSession.projection.messages)
+    : identityBoundHistory;
   const artifactAllowedOrigins = [window.location.origin];
   const runWorkerCommand = (jobId: string, operation: 'refine' | 'redirect' | 'cancel', payload: Record<string, unknown> = {}) => {
     const job = realtimeSession.projection.workerJobs[jobId];

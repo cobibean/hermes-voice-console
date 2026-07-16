@@ -58,11 +58,20 @@ export interface RealtimeInterruptResult extends RealtimeInputResult { realtime_
 export interface RealtimeApprovalResult { client_request_id: string; approval_id: string; accepted: boolean; state: 'resolved' | 'denied' }
 export interface RealtimeWorkerCommandResult {
   command_id: string;
-  worker_job_id?: string;
+  worker_job_id: string;
   operation: 'refine' | 'redirect' | 'cancel';
-  accepted: boolean;
-  acknowledgement?: 'queued' | 'applied' | 'rejected' | 'already_applied';
-  resulting_revision: number;
+  acknowledgement:
+    | 'applied'
+    | 'already_applied'
+    | 'rejected_wrong_owner'
+    | 'rejected_terminal'
+    | 'rejected_stale_revision'
+    | 'rejected_no_steering'
+    | 'rejected_not_signaled'
+    | 'rejected_not_terminal'
+    | 'rejected_unclaimed';
+  revision: number;
+  control_signal_sent: boolean;
 }
 
 export type RealtimeMediaState = 'idle' | 'requesting_microphone' | 'negotiating' | 'connected' | 'failed' | 'closed';

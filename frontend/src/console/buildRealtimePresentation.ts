@@ -17,13 +17,41 @@ function completionSummary(value: unknown): string | undefined {
   if (typeof value === 'string') return text(value);
   if (!value || typeof value !== 'object') return undefined;
   const completion = value as Record<string, unknown>;
+  const parts: string[] = [];
   const summary = text(completion.summary);
-  if (summary) return summary;
+  if (summary) parts.push(summary);
   if (Array.isArray(completion.results)) {
-    const results = completion.results.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()));
-    return results.length ? results.join(' · ') : undefined;
+    for (const item of completion.results) {
+      if (typeof item === 'string' && item.trim()) {
+        parts.push(item.trim());
+      } else if (item && typeof item === 'object') {
+        const result = item as Record<string, unknown>;
+        const resultSummary = text(result.summary);
+        const status = text(result.status);
+        if (resultSummary) parts.push(status ? `${status}: ${resultSummary}` : resultSummary);
+      }
+    }
   }
-  return text(completion.result);
+  const singular = text(completion.result);
+  if (singular) parts.push(singular);
+  return parts.length ? [...new Set(parts)].join(' · ') : undefined;
+}
+
+export function describeRealtimeApproval(
+  approval: Record<string, unknown>,
+  toolCalls: Record<string, Record<string, unknown>>,
+): string {
+  const parts = [text(approval.message) ?? 'Hermes needs approval to continue.'];
+  const toolCallId = text(approval.tool_call_id);
+  const toolName = toolCallId ? text(toolCalls[toolCallId]?.tool_name) : undefined;
+  if (toolName) parts.push(`Tool: ${toolName}.`);
+  const expiresAt = number(approval.expires_at);
+  if (expiresAt !== undefined) {
+    const timestamp = expiresAt < 10_000_000_000 ? expiresAt * 1_000 : expiresAt;
+    const date = new Date(timestamp);
+    if (!Number.isNaN(date.getTime())) parts.push(`Expires: ${date.toISOString()}.`);
+  }
+  return parts.join(' ');
 }
 
 export function presentRealtimeJobs(
@@ -74,7 +102,7 @@ export function presentRealtimeJobs(
       tools,
       artifacts,
       verification: text(job.verification) ?? text(latestAttempt?.verification),
-      approvalMessage: text(approval?.message),
+      approvalMessage: approval ? describeRealtimeApproval(approval, toolCalls) : undefined,
     };
   });
 }

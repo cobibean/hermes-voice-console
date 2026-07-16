@@ -57,11 +57,25 @@ describe('RealtimeControlClient', () => {
     await expect(approval).resolves.toEqual(expect.objectContaining({ approval_id: 'approval_1' }));
 
     const worker = client.workerCommand('worker-command-1', 'job_1', 'refine', 3, { context: 'Use the safer path' });
-    sockets[0].json({ type: 'ack', client_request_id: 'worker-command-1', result: { command_id: 'worker-command-1', worker_job_id: 'job_1', operation: 'refine', accepted: true, acknowledgement: 'applied', resulting_revision: 4 } });
-    await expect(worker).resolves.toEqual(expect.objectContaining({ resulting_revision: 4 }));
-    const conflict = client.workerCommand('worker-command-2', 'job_1', 'redirect', 3, { goal: 'new goal' });
-    sockets[0].json({ type: 'error', code: 'revision_conflict', message: 'Worker revision conflict' });
-    await expect(conflict).rejects.toThrow('revision conflict');
+    sockets[0].json({ type: 'ack', client_request_id: 'worker-command-1', result: {
+      command_id: 'worker-command-1', worker_job_id: 'job_1', operation: 'refine',
+      acknowledgement: 'applied', revision: 4, control_signal_sent: true,
+    } });
+    await expect(worker).resolves.toEqual(expect.objectContaining({ revision: 4, acknowledgement: 'applied' }));
+
+    const stale = client.workerCommand('worker-command-2', 'job_1', 'redirect', 3, { goal: 'new goal' });
+    sockets[0].json({ type: 'ack', client_request_id: 'worker-command-2', result: {
+      command_id: 'worker-command-2', worker_job_id: 'job_1', operation: 'redirect',
+      acknowledgement: 'rejected_stale_revision', revision: 4, control_signal_sent: false,
+    } });
+    await expect(stale).resolves.toEqual(expect.objectContaining({ revision: 4, acknowledgement: 'rejected_stale_revision' }));
+
+    const cancel = client.workerCommand('worker-command-3', 'job_1', 'cancel', 4);
+    sockets[0].json({ type: 'ack', client_request_id: 'worker-command-3', result: {
+      command_id: 'worker-command-3', worker_job_id: 'job_1', operation: 'cancel',
+      acknowledgement: 'already_applied', revision: 5, control_signal_sent: true,
+    } });
+    await expect(cancel).resolves.toEqual(expect.objectContaining({ revision: 5, acknowledgement: 'already_applied' }));
     client.close();
   });
 
@@ -130,6 +144,28 @@ describe('RealtimeControlClient', () => {
     sockets[0].emit('close');
     await vi.advanceTimersByTimeAsync(100);
     expect(client.isReady).toBe(true);
+    expect(sockets).toHaveLength(2);
+    client.close();
+  });
+
+  it.each([
+    ['subscribed without snapshot', { type: 'subscribed', realtime_session_id: 'rt_1', after: null, cursor_rebased: true }],
+    ['pre-ready error', { type: 'error', code: 'attach_failed', message: 'Hermes attach failed' }],
+  ])('closes and reconnects after %s', async (_label, terminalFrame) => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const client = new RealtimeControlClient({
+      getToken: vi.fn(async () => null), target: 'fake', conversationId: 'hvc_1', sessionId: 'rt_1',
+      onSnapshot: vi.fn(), onEvent: vi.fn(), reconnectDelayMs: 10,
+      createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket as unknown as WebSocket; },
+    });
+    const first = client.connect();
+    sockets[0].emit('open'); await Promise.resolve();
+    sockets[0].json({ type: 'auth.ok', principal_kind: 'development', expires_at: null });
+    sockets[0].json(terminalFrame);
+    await expect(first).rejects.toThrow();
+    expect(sockets[0].readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(10);
     expect(sockets).toHaveLength(2);
     client.close();
   });

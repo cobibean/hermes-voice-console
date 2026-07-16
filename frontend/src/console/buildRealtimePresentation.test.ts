@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyRealtimeProjection } from './conversationProjection';
-import { presentRealtimeJobs, realtimeReadiness, workerControlPayload } from './buildRealtimePresentation';
+import { describeRealtimeApproval, presentRealtimeJobs, realtimeReadiness, workerControlPayload } from './buildRealtimePresentation';
 import { projectionForIdentity, type RealtimeSessionController } from './useRealtimeSession';
 
 function session(overrides: Partial<RealtimeSessionController> = {}): RealtimeSessionController {
@@ -10,7 +10,7 @@ function session(overrides: Partial<RealtimeSessionController> = {}): RealtimeSe
     connect: async () => undefined, close: () => undefined, setMuted: () => undefined,
     setManualTurnTaking: () => undefined, startManualTurn: () => undefined, stopManualTurn: () => undefined,
     sendInput: async () => undefined, interruptSpeech: async () => undefined, resolveApproval: async () => undefined,
-    workerCommand: async () => undefined, ...overrides,
+    submittingApprovalId: null, workerCommand: async () => undefined, ...overrides,
   };
 }
 
@@ -39,12 +39,19 @@ describe('Realtime presentation adapter', () => {
       ...emptyRealtimeProjection,
       workerJobs: { job_2: {
         worker_job_id: 'job_2', task: { goal: 'Ship the bridge' }, status: 'outcome_unknown', revision: 4,
-        completion: { summary: 'Process state could not be proven' },
+        completion: {
+          summary: 'Process state could not be proven',
+          results: [
+            { status: 'completed', summary: 'Source updated' },
+            { status: 'failed', summary: 'Live verification unavailable' },
+          ],
+        },
         attempts: [{ attempt_number: 2, supersedes_attempt_id: 'attempt_1', verification: 'unverified' }],
       } },
     };
     expect(presentRealtimeJobs(session({ projection }), [window.location.origin])[0]).toEqual(expect.objectContaining({
-      title: 'Ship the bridge', status: 'failed', summary: 'Process state could not be proven',
+      title: 'Ship the bridge', status: 'failed',
+      summary: 'Process state could not be proven · completed: Source updated · failed: Live verification unavailable',
       attempt: 2, parentAttemptId: 'attempt_1', verification: 'unverified',
     }));
   });
@@ -59,5 +66,18 @@ describe('Realtime presentation adapter', () => {
     const previous = { ...emptyRealtimeProjection, workerJobs: { old_job: { worker_job_id: 'old_job' } } };
     expect(projectionForIdentity(previous, 'target-a|conversation-a', 'target-a|conversation-b')).toBe(emptyRealtimeProjection);
     expect(projectionForIdentity(previous, 'target-a|conversation-a', 'target-a|conversation-a')).toBe(previous);
+  });
+
+  it('describes approval using authoritative tool identity and expiration without arguments', () => {
+    const message = describeRealtimeApproval(
+      {
+        approval_id: 'approval_1', tool_call_id: 'call_1', expires_at: 1_800_000_000,
+        arguments: { command: 'must-not-render' },
+      },
+      { call_1: { tool_call_id: 'call_1', tool_name: 'terminal' } },
+    );
+    expect(message).toContain('Tool: terminal.');
+    expect(message).toContain('Expires: 2027-01-15T08:00:00.000Z.');
+    expect(message).not.toContain('must-not-render');
   });
 });
