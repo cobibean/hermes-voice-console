@@ -53,12 +53,16 @@ export interface RealtimePresentationModel {
   canReconnect: boolean;
   muted: boolean;
   manualTurnTaking: boolean;
+  manualCaptureState?: 'idle' | 'starting' | 'capturing' | 'committing' | 'error';
+  manualCaptureError?: string;
   listening: boolean;
   speaking: boolean;
   jobs: WorkerJobPresentation[];
   onToggleMute?: () => void;
   onToggleManualTurnTaking?: () => void;
+  onStartManualTurn?: () => void;
   onSendManualTurn?: () => void;
+  onDiscardManualTurn?: () => void;
   onInterrupt?: () => void;
   onEndCall?: () => void;
   onReconnect?: () => void;

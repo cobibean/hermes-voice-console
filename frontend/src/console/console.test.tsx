@@ -178,4 +178,45 @@ describe('console architecture seams', () => {
     expect(shell?.style.getPropertyValue('--mobile-touch-target')).toBe('44px');
     expect(buttons.every((button) => button.closest('.mobile-console') === shell)).toBe(true);
   });
+
+  it('keeps the manual capture interaction identical across desktop and mobile shells', () => {
+    const onStart = vi.fn();
+    const onSend = vi.fn();
+    const onDiscard = vi.fn();
+    const idle = {
+      ...realtime,
+      manualTurnTaking: true,
+      manualCaptureState: 'idle' as const,
+      onStartManualTurn: onStart,
+      onSendManualTurn: onSend,
+      onDiscardManualTurn: onDiscard,
+    };
+    const capturing = { ...idle, manualCaptureState: 'capturing' as const, listening: true };
+    const automatic = { ...idle, manualTurnTaking: false };
+
+    const desktop = render(<DesktopConsole controller={controller} realtime={idle} />);
+    fireEvent.click(within(desktop.container).getByRole('button', { name: 'Start recording' }));
+    desktop.rerender(<DesktopConsole controller={controller} realtime={capturing} />);
+    fireEvent.click(within(desktop.container).getByRole('button', { name: 'Send recording' }));
+    fireEvent.click(within(desktop.container).getByRole('button', { name: 'Discard recording' }));
+    desktop.rerender(<DesktopConsole controller={controller} realtime={automatic} />);
+    expect(within(desktop.container).queryByLabelText('Manual recording')).not.toBeInTheDocument();
+    desktop.unmount();
+
+    const mobile = render(<MobileConsole controller={controller} realtime={idle} />);
+    fireEvent.click(within(mobile.container).getByRole('button', { name: 'Start recording' }));
+    mobile.rerender(<MobileConsole controller={controller} realtime={capturing} />);
+    const send = within(mobile.container).getByRole('button', { name: 'Send recording' });
+    const discard = within(mobile.container).getByRole('button', { name: 'Discard recording' });
+    expect(send).toHaveClass('touch-target');
+    expect(discard).toHaveClass('touch-target');
+    fireEvent.click(send);
+    fireEvent.click(discard);
+    mobile.rerender(<MobileConsole controller={controller} realtime={automatic} />);
+    expect(within(mobile.container).queryByLabelText('Manual recording')).not.toBeInTheDocument();
+
+    expect(onStart).toHaveBeenCalledTimes(2);
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(onDiscard).toHaveBeenCalledTimes(2);
+  });
 });
