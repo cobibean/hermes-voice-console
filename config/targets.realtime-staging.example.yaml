@@ -1,0 +1,23 @@
+targets:
+  staging-hermes:
+    label: "Hermes Realtime staging"
+    base_url: "http://127.0.0.1:8642"
+    api_key_env: "HERMES_STAGING_API_SERVER_KEY"
+    default_session_key: "voice-console:staging-hermes"
+    preferred_transport: "runs"
+    realtime_rollout_scope: "staging"
+    # This example is intentionally scoped to one disposable staging target.
+    realtime_enabled: true
+    voice:
+      tts_voice: "default"
+
+  production-hermes:
+    label: "Hermes production (Realtime disabled)"
+    base_url: "http://127.0.0.1:8643"
+    api_key_env: "HERMES_PRODUCTION_API_SERVER_KEY"
+    default_session_key: "voice-console:production-hermes"
+    preferred_transport: "runs"
+    realtime_rollout_scope: "production"
+    realtime_enabled: false
+    voice:
+      tts_voice: "default"

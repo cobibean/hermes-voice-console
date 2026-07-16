@@ -1,5 +1,7 @@
 # Rollback / Uninstall
 
+For a Realtime-only rollback that preserves conversations and worker evidence, use the [Realtime Rollout and Release Lane](realtime-rollout-and-release.md). Do not uninstall or delete state merely to disable a target's Realtime path.
+
 The voice console is standalone. Rolling it back does not require Hermes source changes.
 
 ## Stop a foreground dev server

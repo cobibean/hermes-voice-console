@@ -1,5 +1,7 @@
 # Portable Deployment
 
+For GPT-Realtime-2.1 staging, supported-pin validation, physical-device acceptance, and rollback, follow [Realtime Rollout and Release Lane](realtime-rollout-and-release.md). Realtime remains target-scoped and disabled by default.
+
 ## Container contract
 
 The image is a multi-stage Node/Python build. The final runtime contains no Node toolchain, runs as UID/GID `10001`, packages the built frontend inside the Python wheel, stores mutable state only under `/data`, and uses Python for its healthcheck.

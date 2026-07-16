@@ -27,6 +27,8 @@ This repository is intentionally separate from `NousResearch/hermes-agent` and f
 
 The current product and deployment source of truth is the [V1 implementation plan](docs/plans/2026-07-12-portable-hermes-voice-console-v1-implementation-plan.md). The older remote-rollout note is retained only as superseded history.
 
+The target-scoped GPT-Realtime-2.1 staging, rollback, and upgrade process is documented in the [Realtime rollout and release lane](docs/realtime-rollout-and-release.md). The generic Hermes contribution is prepared separately in the [upstream handoff](docs/hermes-realtime-upstream-handoff.md); neither document authorizes an external deployment or upstream write.
+
 ## Quickstart: deterministic fake E2E
 
 ```bash
