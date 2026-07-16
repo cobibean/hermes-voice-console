@@ -28,6 +28,36 @@ async function submit(page: Page, text: string) {
 
 test.describe.configure({ mode: 'serial' });
 
+test('presents the Hermes research-console identity at desktop and mobile sizes', async ({ browser }) => {
+  const desktop = await openConsole(browser, { viewport: { width: 1440, height: 1000 } });
+  await expect(desktop.page.locator('.hermes-mark')).toBeVisible();
+  await expect(desktop.page.getByRole('heading', { name: 'Voice Console' })).toBeVisible();
+  await expect(desktop.page.getByLabel('Agent model roles')).toContainText('GPT-Realtime 2.1');
+  await expect(desktop.page.getByLabel('Agent model roles')).toContainText('GPT-5.6');
+  const desktopVisuals = await desktop.page.evaluate(() => {
+    const heading = document.querySelector<HTMLElement>('.hero h1');
+    const card = document.querySelector<HTMLElement>('.card');
+    return {
+      headingFamily: heading ? getComputedStyle(heading).fontFamily : '',
+      cardBorder: card ? getComputedStyle(card).borderTopStyle : '',
+      overflow: document.documentElement.scrollWidth <= window.innerWidth,
+    };
+  });
+  expect(desktopVisuals.headingFamily).toContain('Iowan Old Style');
+  expect(desktopVisuals.cardBorder).toBe('solid');
+  expect(desktopVisuals.overflow).toBe(true);
+  await desktop.context.close();
+
+  const mobile = await openConsole(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await expect(mobile.page.locator('.hermes-mark-mobile')).toBeVisible();
+  const recordBounds = await mobile.page.getByRole('button', { name: 'Start recording' }).boundingBox();
+  expect(recordBounds).not.toBeNull();
+  expect(recordBounds!.width).toBeGreaterThanOrEqual(44);
+  expect(recordBounds!.height).toBeGreaterThanOrEqual(44);
+  expect(await mobile.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await mobile.context.close();
+});
+
 test('renders the intended desktop, compact, and mobile shells without overflow', async ({ browser }) => {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }]) {
     const { context, page } = await openConsole(browser, { viewport });

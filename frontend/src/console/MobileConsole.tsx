@@ -32,9 +32,12 @@ export function MobileConsole({
       style={{ '--mobile-touch-target': `${MOBILE_TOUCH_TARGET_PX}px` } as CSSProperties}
     >
       <header className="mobile-header">
-        <div>
-          <p className="eyebrow">Hermes Voice Console</p>
-          <strong>{controller.viewState.replaceAll('_', ' ')}</strong>
+        <div className="mobile-brand">
+          <span className="hermes-mark hermes-mark-mobile" aria-hidden="true">☤</span>
+          <div>
+            <p className="eyebrow">Hermes · Voice</p>
+            <strong>{controller.viewState.replaceAll('_', ' ')}</strong>
+          </div>
         </div>
         {accountControl}
       </header>

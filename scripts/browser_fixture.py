@@ -11,13 +11,12 @@ from pathlib import Path
 
 import uvicorn
 import yaml
-
 from voice_console.app import create_app
 from voice_console.fake_target import API_KEY, create_fake_hermes_app
 
 ROOT = Path(__file__).resolve().parents[1]
-CONSOLE_PORT = 8790
-FAKE_PORT = 9877
+CONSOLE_PORT = int(os.environ.get("HVC_BROWSER_CONSOLE_PORT", "8790"))
+FAKE_PORT = int(os.environ.get("HVC_BROWSER_FAKE_PORT", "9877"))
 
 
 class ServerThread:
@@ -80,6 +79,9 @@ def main() -> None:
                             "base_url": f"http://127.0.0.1:{FAKE_PORT}",
                             "api_key_env": "FAKE_HERMES_API_KEY",
                             "default_session_key": "voice-console:browser-fake",
+                            # Visual QA can exercise the Realtime presentation against the
+                            # deterministic fake target without changing the default E2E lane.
+                            "realtime_enabled": os.environ.get("HVC_BROWSER_REALTIME") == "1",
                         }
                     }
                 }
