@@ -368,11 +368,46 @@ def parse_command(document: Mapping[str, Any], *, command_id: str,
                   worker_job_id: str) -> dict[str, Any]:
     if _id(document, "command_id") != command_id:
         _mismatch("command")
-    if document.get("worker_job_id") not in {None, worker_job_id}:
+    if _id(document, "worker_job_id") != worker_job_id:
         _mismatch("command worker job")
-    allowed = {"command_id", "worker_job_id", "operation", "acknowledgement", "accepted",
-               "revision", "resulting_revision", "requires_interrupt"}
-    return {key: _safe(value) for key, value in document.items() if key in allowed}
+    expected_keys = {
+        "command_id",
+        "worker_job_id",
+        "acknowledgement",
+        "revision",
+        "operation",
+        "control_signal_sent",
+    }
+    if set(document) != expected_keys:
+        _invalid("worker command acknowledgement shape")
+    acknowledgement = document.get("acknowledgement")
+    if acknowledgement not in {
+        "applied",
+        "already_applied",
+        "rejected_stale_revision",
+        "rejected_terminal",
+        "rejected_wrong_owner",
+        "rejected_no_steering",
+        "rejected_not_signaled",
+    }:
+        _invalid("worker command acknowledgement")
+    revision = document.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        _invalid("worker command revision")
+    operation = document.get("operation")
+    if operation not in {"refine", "redirect", "cancel"}:
+        _invalid("worker command operation")
+    signal_sent = document.get("control_signal_sent")
+    if not isinstance(signal_sent, bool):
+        _invalid("worker command control signal")
+    return {
+        "command_id": command_id,
+        "worker_job_id": worker_job_id,
+        "acknowledgement": acknowledgement,
+        "revision": revision,
+        "operation": operation,
+        "control_signal_sent": signal_sent,
+    }
 
 
 def parse_snapshot(document: Mapping[str, Any], *, conversation_id: str) -> dict[str, Any]:

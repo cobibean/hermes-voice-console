@@ -663,11 +663,46 @@ def create_fake_hermes_app() -> FastAPI:
         command_id = body.get("command_id")
         existing = next((item for item in job["commands"] if item["command_id"] == command_id), None)
         if existing is not None:
-            return existing
+            return {
+                **existing,
+                "acknowledgement": (
+                    "already_applied"
+                    if existing["acknowledgement"] == "applied"
+                    else existing["acknowledgement"]
+                ),
+                "control_signal_sent": False,
+            }
+        if job["status"] in {"completed", "failed", "cancelled", "outcome_unknown"}:
+            result = {
+                "command_id": command_id,
+                "worker_job_id": worker_job_id,
+                "acknowledgement": "rejected_terminal",
+                "revision": job["revision"],
+                "operation": operation,
+                "control_signal_sent": False,
+            }
+            job["commands"].append(result)
+            return result
         if body.get("expected_revision") != job["revision"]:
-            raise HTTPException(status_code=409, detail="revision conflict")
+            result = {
+                "command_id": command_id,
+                "worker_job_id": worker_job_id,
+                "acknowledgement": "rejected_stale_revision",
+                "revision": job["revision"],
+                "operation": operation,
+                "control_signal_sent": False,
+            }
+            job["commands"].append(result)
+            return result
         job["revision"] += 1
-        result = {"command_id": command_id, "operation": operation, "accepted": True, "resulting_revision": job["revision"]}
+        result = {
+            "command_id": command_id,
+            "worker_job_id": worker_job_id,
+            "acknowledgement": "applied",
+            "revision": job["revision"],
+            "operation": operation,
+            "control_signal_sent": True,
+        }
         job["commands"].append(result)
         if str(command_id).startswith("ambiguous"):
             await asyncio.sleep(0.2)

@@ -65,3 +65,8 @@ authoritative snapshot before replay events and accepts bounded `input`, `interr
 `{type: "manual_audio_commit", client_request_id, session_generation}`. Both return
 `{type: "ack", client_request_id, result}`. Heartbeats, send deadlines, replay-gap snapshots, and a
 slow-consumer close policy keep this channel independent from the legacy `/ws/voice` state machine.
+
+Worker command acknowledgements preserve Hermes' authoritative shape:
+`{command_id, worker_job_id, acknowledgement, revision, operation, control_signal_sent}`. Rejected
+or stale commands are normal typed acknowledgements, not fabricated HTTP conflicts; duplicate
+applied commands return `acknowledgement: "already_applied"`.

@@ -135,7 +135,7 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
             / "hermes_realtime_phase4_mutation_shapes.json"
         ).read_text()
     )
-    assert fixture["source_revision"].endswith("+phase4.1-planned")
+    assert fixture["source_commit"] == "351da78c98564002effa32d57f5c8fd2fedfa1e9"
     shapes = fixture["mutations"]
     fake = app.state.fake_hermes_app
 
@@ -355,7 +355,7 @@ def test_create_activate_snapshot_replay_gap_and_approval(console):
 
 
 def test_worker_job_routes_commands_and_idempotency(console):
-    client, _app, conversation_id = console
+    client, app, conversation_id = console
     session = create_realtime(client, conversation_id).json()
     jobs = client.get(
         f"/api/realtime/conversations/{conversation_id}/worker-jobs?target=fake"
@@ -381,8 +381,52 @@ def test_worker_job_routes_commands_and_idempotency(console):
         json=command,
     )
     assert first.status_code == second.status_code == 200
-    assert first.json() == second.json()
-    assert first.json()["resulting_revision"] == 2
+    assert first.json() == {
+        "command_id": "command_1",
+        "worker_job_id": "job_1",
+        "acknowledgement": "applied",
+        "revision": 2,
+        "operation": "refine",
+        "control_signal_sent": True,
+    }
+    assert second.json() == {
+        **first.json(),
+        "acknowledgement": "already_applied",
+        "control_signal_sent": False,
+    }
+    shape = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "hermes_realtime_phase4_mutation_shapes.json"
+        ).read_text()
+    )["mutations"]["worker_command"]
+    assert_phase4_shape(first.json(), shape)
+    assert_phase4_shape(second.json(), shape)
+
+    stale_command = {
+        "command_id": "command_stale_1",
+        "expected_revision": 1,
+        "payload": {"context": "This revision is stale"},
+    }
+    stale = client.post(
+        f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/refine?target=fake",
+        json=stale_command,
+    )
+    stale_duplicate = client.post(
+        f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/refine?target=fake",
+        json=stale_command,
+    )
+    assert stale.status_code == stale_duplicate.status_code == 200
+    assert stale.json() == stale_duplicate.json() == {
+        "command_id": "command_stale_1",
+        "worker_job_id": "job_1",
+        "acknowledgement": "rejected_stale_revision",
+        "revision": 2,
+        "operation": "refine",
+        "control_signal_sent": False,
+    }
+    assert_phase4_shape(stale.json(), shape)
 
     interrupted = client.post(
         f"/api/realtime/sessions/{session['realtime_session_id']}/interrupt?target=fake",
@@ -396,6 +440,18 @@ def test_worker_job_routes_commands_and_idempotency(console):
         f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1?target=fake"
     )
     assert still_running.json()["status"] == "running"
+
+    app.state.fake_hermes_app.state.worker_jobs[conversation_id]["job_1"][
+        "status"
+    ] = "completed"
+    terminal = client.post(
+        f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/cancel?target=fake",
+        json={"command_id": "command_terminal_1", "expected_revision": 2, "payload": {}},
+    )
+    assert terminal.status_code == 200
+    assert terminal.json()["acknowledgement"] == "rejected_terminal"
+    assert terminal.json()["control_signal_sent"] is False
+    assert_phase4_shape(terminal.json(), shape)
 
 
 def test_ownership_is_checked_for_every_conversation_route(console):
@@ -628,6 +684,29 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
                 "state": "accepted",
                 "audio_commit_requested": True,
                 "response_requested": True,
+            },
+        }
+        socket.send_json(
+            {
+                "type": "worker.command",
+                "client_request_id": "ws_worker_1",
+                "worker_job_id": "job_1",
+                "operation": "refine",
+                "expected_revision": 1,
+                "payload": {"context": "Use the safer path"},
+            }
+        )
+        worker_ack = socket.receive_json()
+        assert worker_ack == {
+            "type": "ack",
+            "client_request_id": "ws_worker_1",
+            "result": {
+                "command_id": "ws_worker_1",
+                "worker_job_id": "job_1",
+                "acknowledgement": "applied",
+                "revision": 2,
+                "operation": "refine",
+                "control_signal_sent": True,
             },
         }
         socket.send_json({"type": "ping"})

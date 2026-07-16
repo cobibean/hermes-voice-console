@@ -1,8 +1,7 @@
 {
   "source_repository": "hermes-agent-realtime",
-  "source_commit": null,
-  "source_revision": "9e4ea6935f71c38bf598d930978e9ea2526136a8+phase4.1-planned",
-  "source_files": ["gateway/realtime/api.py", "gateway/realtime/contracts.py"],
+  "source_commit": "351da78c98564002effa32d57f5c8fd2fedfa1e9",
+  "source_files": ["gateway/realtime/api.py", "gateway/realtime/contracts.py", "gateway/worker_jobs/runtime.py", "gateway/worker_jobs/store.py"],
   "contract_version": "1.0",
   "mutations": {
     "create": {
@@ -33,6 +32,10 @@
       "keys": ["client_request_id", "realtime_session_id", "session_generation", "turn_mode", "state"],
       "types": {"client_request_id": "string", "realtime_session_id": "string", "session_generation": "integer", "turn_mode": "string", "state": "string"},
       "constants": {"state": "accepted"}
+    },
+    "worker_command": {
+      "keys": ["command_id", "worker_job_id", "acknowledgement", "revision", "operation", "control_signal_sent"],
+      "types": {"command_id": "string", "worker_job_id": "string", "acknowledgement": "string", "revision": "integer", "operation": "string", "control_signal_sent": "boolean"}
     },
     "interrupt": {
       "keys": ["client_request_id", "realtime_session_id", "interrupted", "state"],
