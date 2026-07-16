@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyRealtimeProjection } from './conversationProjection';
+import { emptyRealtimeProjection, projectRealtimeSnapshot } from './conversationProjection';
 import { describeRealtimeApproval, presentRealtimeJobs, realtimeReadiness, workerControlPayload } from './buildRealtimePresentation';
 import { projectionForIdentity, type RealtimeSessionController } from './useRealtimeSession';
 
@@ -68,16 +68,44 @@ describe('Realtime presentation adapter', () => {
     expect(projectionForIdentity(previous, 'target-a|conversation-a', 'target-a|conversation-a')).toBe(previous);
   });
 
-  it('describes approval using authoritative tool identity and expiration without arguments', () => {
+  it('describes the exact durable Hermes reconnect approval without tool calls or arguments', () => {
+    const projection = projectRealtimeSnapshot({
+      conversation_id: 'conversation-1',
+      last_event_id: null,
+      pending_approvals: [{
+        approval_id: 'approval-1',
+        state: 'pending',
+        tool_call_id: 'call-1',
+        tool_name: 'run_shell',
+        expires_at: 1_800_000_000,
+      }],
+    });
+
+    expect(projection.toolCalls).toEqual({});
+    expect(projection.approvals['approval-1']).toEqual({
+      approval_id: 'approval-1',
+      state: 'pending',
+      tool_call_id: 'call-1',
+      tool_name: 'run_shell',
+      expires_at: 1_800_000_000,
+    });
     const message = describeRealtimeApproval(
-      {
-        approval_id: 'approval_1', tool_call_id: 'call_1', expires_at: 1_800_000_000,
-        arguments: { command: 'must-not-render' },
-      },
-      { call_1: { tool_call_id: 'call_1', tool_name: 'terminal' } },
+      projection.approvals['approval-1'],
+      projection.toolCalls,
     );
-    expect(message).toContain('Tool: terminal.');
+    expect(message).toContain('Tool: run_shell.');
     expect(message).toContain('Expires: 2027-01-15T08:00:00.000Z.');
-    expect(message).not.toContain('must-not-render');
+    expect(message).not.toContain('argument');
+  });
+
+  it('prefers the approval tool name and falls back to the durable tool call join', () => {
+    expect(describeRealtimeApproval(
+      { approval_id: 'approval_1', tool_call_id: 'call_1', tool_name: 'run_shell' },
+      { call_1: { tool_call_id: 'call_1', tool_name: 'stale_name' } },
+    )).toContain('Tool: run_shell.');
+    expect(describeRealtimeApproval(
+      { approval_id: 'approval_2', tool_call_id: 'call_2' },
+      { call_2: { tool_call_id: 'call_2', tool_name: 'terminal' } },
+    )).toContain('Tool: terminal.');
   });
 });

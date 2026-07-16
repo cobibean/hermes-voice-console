@@ -43,7 +43,8 @@ export function describeRealtimeApproval(
 ): string {
   const parts = [text(approval.message) ?? 'Hermes needs approval to continue.'];
   const toolCallId = text(approval.tool_call_id);
-  const toolName = toolCallId ? text(toolCalls[toolCallId]?.tool_name) : undefined;
+  const toolName = text(approval.tool_name)
+    ?? (toolCallId ? text(toolCalls[toolCallId]?.tool_name) : undefined);
   if (toolName) parts.push(`Tool: ${toolName}.`);
   const expiresAt = number(approval.expires_at);
   if (expiresAt !== undefined) {
