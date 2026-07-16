@@ -325,6 +325,11 @@ def test_capability_negotiation_is_strict_and_preserves_rich_contract(console):
     assert document["contract"]["sessions"]["manual_audio_commit"] is True
     assert document["contract"]["sessions"]["manual_audio_discard"] is True
     assert document["contract"]["sessions"]["turn_mode_update"] is True
+    assert document["contract"]["context"] == {
+        "workspace_attached": False,
+        "filesystem_tools_available": False,
+        "soul_available": True,
+    }
     assert "Bearer fake" not in response.text
 
     incompatible = check_realtime_compatibility(

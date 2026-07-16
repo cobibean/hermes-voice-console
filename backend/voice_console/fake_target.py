@@ -154,6 +154,7 @@ def create_fake_hermes_app() -> FastAPI:
                     "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "manual_audio_commit": True, "manual_audio_discard": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"], "turn_mode_update": True},
                     "events": {"replay": True, "durable": True, "cursor": "event_id", "gap_error": "event_replay_gap"},
                     "tools": {"execution": "server", "direct_allowlist": ["get_status"], "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
+                    "context": {"workspace_attached": False, "filesystem_tools_available": False, "soul_available": True},
                     "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "command_result_lookup": True, "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
                     "approvals": {"server_authoritative": True, "choices": ["once", "deny"], "pending_snapshot_fields": ["approval_id", "state", "tool_call_id", "tool_name", "expires_at"]},
                     "routing_policy": {"persona_model": "gpt-realtime-2.1", "substantial_work": "delegate", "default_fanout": 1, "confirmation": "announce_without_prompting"},

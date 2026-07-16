@@ -7,6 +7,7 @@ from typing import Any
 
 SUPPORTED_CONTRACT_MAJOR = 1
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+FILESYSTEM_DIRECT_TOOLS = frozenset({"read_file", "search_files"})
 
 REQUIRED_FEATURES = frozenset(
     {
@@ -161,6 +162,20 @@ def check_realtime_compatibility(capabilities: Mapping[str, Any]) -> RealtimeCom
         or tools.get("raw_delegate_task_exposed") is not False
     ):
         reasons.append("required server tool authority or delegation boundary is missing")
+    direct_allowlist = tools.get("direct_allowlist") if isinstance(tools, Mapping) else None
+    filesystem_tools_configured = bool(
+        isinstance(direct_allowlist, list)
+        and FILESYSTEM_DIRECT_TOOLS.intersection(
+            str(name) for name in direct_allowlist if isinstance(name, str)
+        )
+    )
+    context = raw.get("context")
+    if filesystem_tools_configured and (
+        not isinstance(context, Mapping)
+        or context.get("workspace_attached") is not True
+        or context.get("filesystem_tools_available") is not True
+    ):
+        reasons.append("Hermes workspace unavailable")
     workers = raw.get("workers")
     commands = workers.get("commands") if isinstance(workers, Mapping) else None
     delivery = workers.get("delivery") if isinstance(workers, Mapping) else None
@@ -234,6 +249,7 @@ def _safe_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "events": ("replay", "durable", "cursor", "gap_error"),
         "tools": ("execution", "direct_allowlist", "delegation_tool", "raw_delegate_task_exposed"),
+        "context": ("workspace_attached", "filesystem_tools_available", "soul_available"),
         "workers": ("lead_model", "max_concurrency", "max_fanout", "queue", "commands", "command_result_lookup", "ownership", "optimistic_revision", "delivery"),
         "approvals": ("server_authoritative", "choices", "pending_snapshot_fields"),
         "routing_policy": ("persona_model", "substantial_work", "default_fanout", "confirmation"),
@@ -268,7 +284,14 @@ def _safe_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
     for section, keys in allowed.items():
         value = raw.get(section)
         if isinstance(value, Mapping):
-            result[section] = {key: primitive(value.get(key)) for key in keys if key in value}
+            if section == "context":
+                result[section] = {
+                    key: value[key]
+                    for key in keys
+                    if key in value and isinstance(value[key], bool)
+                }
+            else:
+                result[section] = {key: primitive(value.get(key)) for key in keys if key in value}
     return result
 
 

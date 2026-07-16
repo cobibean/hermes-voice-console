@@ -58,6 +58,20 @@ def test_phase8_public_contract_is_allowlisted_and_content_free() -> None:
     assert "instructions" not in public["contract"]
 
 
+def test_phase8_public_context_only_exposes_path_free_booleans() -> None:
+    capabilities = valid_capabilities()
+    context = capabilities["contracts"]["realtime"]["context"]
+    context["workspace_attached"] = "/Users/example/private-workspace"
+    context["soul_available"] = "SOUL.md"
+
+    public = check_realtime_compatibility(capabilities).public_dict()
+
+    assert public["compatible"] is True
+    assert public["contract"]["context"] == {"filesystem_tools_available": False}
+    assert "/Users/example/private-workspace" not in str(public)
+    assert "SOUL.md" not in str(public)
+
+
 def test_phase8_default_worker_policy_is_one_and_fanout_is_bounded() -> None:
     capabilities = valid_capabilities()
     contract = capabilities["contracts"]["realtime"]
@@ -76,6 +90,42 @@ def test_phase8_browser_cannot_authorize_policy_or_tool_results() -> None:
     assert contract["tools"]["raw_delegate_task_exposed"] is False
     assert contract["approvals"]["server_authoritative"] is True
     assert set(contract["approvals"]["choices"]) == {"once", "deny"}
+
+
+def test_phase8_filesystem_tools_require_an_attached_workspace() -> None:
+    capabilities = valid_capabilities()
+    contract = capabilities["contracts"]["realtime"]
+    contract["tools"]["direct_allowlist"] = ["read_file", "search_files"]
+
+    missing_context = check_realtime_compatibility(capabilities)
+    assert missing_context.compatible is False
+    assert missing_context.reasons.count("Hermes workspace unavailable") == 1
+
+    contract["context"] = {
+        "workspace_attached": False,
+        "filesystem_tools_available": False,
+        "soul_available": True,
+    }
+    detached = check_realtime_compatibility(capabilities)
+    assert detached.compatible is False
+    assert detached.reasons.count("Hermes workspace unavailable") == 1
+
+    contract["context"]["workspace_attached"] = True
+    unavailable = check_realtime_compatibility(capabilities)
+    assert unavailable.compatible is False
+    assert unavailable.reasons.count("Hermes workspace unavailable") == 1
+
+    contract["context"]["filesystem_tools_available"] = True
+    attached = check_realtime_compatibility(capabilities)
+    assert attached.compatible is True
+
+
+def test_phase8_chat_only_target_does_not_require_a_workspace() -> None:
+    capabilities = valid_capabilities()
+    contract = capabilities["contracts"]["realtime"]
+    assert contract["tools"]["direct_allowlist"] == ["get_status"]
+    assert contract["context"]["workspace_attached"] is False
+    assert check_realtime_compatibility(capabilities).compatible is True
 
 
 def test_phase8_asset_gate_detects_browser_secret_and_source_map(tmp_path: Path) -> None:

@@ -476,8 +476,10 @@ describe('useRealtimeSession approval and identity ownership', () => {
     await expect(result.current.connect()).rejects.toThrow('preflight has not passed for this target');
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
 
-    targetB.resolve({ compatible: false, version: '1.0', reasons: ['manual endpoints missing'], contract: {} });
+    targetB.resolve({ compatible: false, version: '1.0', reasons: ['Hermes workspace unavailable'], contract: {} });
     await waitFor(() => expect(result.current.state).toBe('blocked'));
+    expect(result.current.stateDetail).toBe('Hermes workspace unavailable');
+    await expect(result.current.connect()).rejects.toThrow('Hermes workspace unavailable');
     expect(result.current.manualControlsAvailable).toBe(false);
     expect(mocks.createSession).toHaveBeenCalledTimes(1);
   });
