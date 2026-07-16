@@ -157,6 +157,7 @@ export function useRealtimeSession({
     promise?: Promise<void>;
   } | null>(null);
   const manualCaptureIdentityRef = useRef(identity);
+  const manualRecoveryRequiredRef = useRef(false);
   const approvalRequestRef = useRef<{
     approvalId: string;
     clientRequestId: string;
@@ -172,6 +173,7 @@ export function useRealtimeSession({
     modeRequestRef.current = null;
     manualTurnRef.current = null;
     manualCaptureIdentityRef.current = identity;
+    manualRecoveryRequiredRef.current = false;
   }
 
   const currentCompatibility = compatibilityTarget === target ? compatibility : null;
@@ -184,6 +186,7 @@ export function useRealtimeSession({
     setManualCaptureState('idle');
     setManualCaptureError(undefined);
     setManualCaptureRetryable(true);
+    manualRecoveryRequiredRef.current = false;
     connectRef.current = null;
     controlRef.current?.close();
     controlRef.current = null;
@@ -225,10 +228,13 @@ export function useRealtimeSession({
   const connect = useCallback(async () => {
     if (!enabled) throw new Error('Realtime mode is disabled');
     if (!target || !conversationId) throw new Error('Select a target and conversation first');
-    if (!currentCompatibility?.compatible) throw new Error(stateDetail ?? 'Realtime compatibility preflight has not passed for this target');
+    if (!currentCompatibility?.compatible) {
+      throw new Error(currentCompatibility?.reasons.join('; ') || 'Realtime compatibility preflight has not passed for this target');
+    }
     setSuspended(false);
     const signature = identity;
-    if (signatureRef.current === signature && mediaRef.current?.isConnected && controlRef.current?.isReady) return;
+    const recoveryRequired = manualRecoveryRequiredRef.current;
+    if (!recoveryRequired && signatureRef.current === signature && mediaRef.current?.isConnected && controlRef.current?.isReady) return;
     if (connectRef.current && signatureRef.current === signature) return connectRef.current;
     teardown();
     signatureRef.current = signature;
@@ -291,7 +297,7 @@ export function useRealtimeSession({
     });
     connectRef.current = promise;
     return promise;
-  }, [conversationId, currentCompatibility?.compatible, enabled, getToken, identity, stateDetail, target, teardown]);
+  }, [conversationId, currentCompatibility, enabled, getToken, identity, target, teardown]);
 
   useEffect(() => {
     if (!enabled || suspended || !currentCompatibility?.compatible || !conversationId) return undefined;
@@ -354,6 +360,9 @@ export function useRealtimeSession({
     const { control, session } = required;
     const effectiveManual = modeIdentityRef.current === identity && turnModeRef.current === 'manual';
     if (manual === effectiveManual) return Promise.resolve();
+    if (manualRecoveryRequiredRef.current) {
+      return Promise.reject(new Error('Reconnect this Realtime call before changing turn mode'));
+    }
     if (manualTurnRef.current && ['capturing', 'committing', 'discarding'].includes(manualTurnRef.current.state)) {
       return Promise.reject(new Error('Finish or discard the current manual recording before changing turn mode'));
     }
@@ -376,6 +385,9 @@ export function useRealtimeSession({
       session.session_generation,
       manual ? 'manual' : 'automatic',
     ).then((result) => {
+      if (result.state === 'rejected') {
+        throw new Error('Hermes rejected the turn mode change. The current mode was kept; reconnect before trying again.');
+      }
       if (result.state === 'outcome_unknown' || result.state === 'in_progress') {
         throw new Error('Hermes could not confirm the turn mode change. The current mode was kept and the request will not be retried automatically.');
       }
@@ -393,6 +405,7 @@ export function useRealtimeSession({
       setManualCaptureState('idle');
       setManualCaptureError(undefined);
       setManualCaptureRetryable(true);
+      manualRecoveryRequiredRef.current = false;
       mediaRef.current?.setMuted(manual || mutedRef.current);
     }).catch((error: unknown) => {
       if (operationEpochRef.current === epoch) {
@@ -401,6 +414,7 @@ export function useRealtimeSession({
         mutedRef.current = true;
         setMutedState(true);
         mediaRef.current?.setMuted(true);
+        manualRecoveryRequiredRef.current = true;
         setStateDetail((error as Error).message);
       }
       throw error;
@@ -500,6 +514,7 @@ export function useRealtimeSession({
         setManualCaptureState('idle');
         setManualCaptureError(undefined);
         setManualCaptureRetryable(true);
+        manualRecoveryRequiredRef.current = false;
       })
       .catch((error: unknown) => {
         if (operationEpochRef.current === epoch) {
@@ -507,6 +522,7 @@ export function useRealtimeSession({
           setManualCaptureState('error');
           setManualCaptureError(message);
           setManualCaptureRetryable(false);
+          manualRecoveryRequiredRef.current = true;
           setStateDetail(message);
         }
         throw error;
@@ -556,6 +572,7 @@ export function useRealtimeSession({
         setManualCaptureState('idle');
         setManualCaptureError(undefined);
         setManualCaptureRetryable(true);
+        manualRecoveryRequiredRef.current = false;
       })
       .catch((error: unknown) => {
         if (operationEpochRef.current === epoch && operation.state === 'committing') operation.state = 'failed';
@@ -563,7 +580,9 @@ export function useRealtimeSession({
           const message = (error as Error).message;
           setManualCaptureState('error');
           setManualCaptureError(message);
-          setManualCaptureRetryable(resultRetryableError(message));
+          const retryable = resultRetryableError(message);
+          setManualCaptureRetryable(retryable);
+          manualRecoveryRequiredRef.current = !retryable;
           setStateDetail(message);
         }
         throw error;
@@ -614,13 +633,14 @@ export function useRealtimeSession({
     if (suspended) return 'disconnected';
     if (!currentCompatibility) return 'checking';
     if (!currentCompatibility.compatible) return 'blocked';
+    if (manualRecoveryRequiredRef.current && manualCaptureIdentityRef.current === identity) return 'degraded';
     if (controlState === 'reconnecting') return 'reconnecting';
     if (controlState === 'degraded') return 'degraded';
     if (mediaState === 'failed') return 'failed';
     if (mediaState !== 'connected') return 'connecting_audio';
     if (controlState !== 'ready') return 'attaching_hermes';
     return 'ready';
-  }, [controlState, currentCompatibility, enabled, mediaState, suspended]);
+  }, [controlState, currentCompatibility, enabled, identity, manualCaptureRetryable, manualCaptureState, mediaState, stateDetail, suspended]);
 
   return useMemo(() => ({
     state,

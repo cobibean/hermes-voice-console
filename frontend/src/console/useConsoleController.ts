@@ -645,7 +645,7 @@ export function useConsoleController({
       : undefined,
     onInterrupt: transport === 'realtime' ? cancelSpeech : undefined,
     onEndCall: transport === 'realtime' ? endRealtimeCall : undefined,
-    onReconnect: transport === 'realtime' ? () => { void realtimeSession.connect().catch(dispatchError); } : undefined,
+    onReconnect: transport === 'realtime' ? () => runOwnedRealtimeOperation(realtimeSession.connect) : undefined,
     onUseLegacy: transport === 'realtime' ? () => setTransport('legacy') : undefined,
     onRequestStatus: transport === 'realtime' ? (jobId) => {
       void realtimeSession.sendInput(`Give me a concise status update for delegated task ${jobId}.`)

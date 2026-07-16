@@ -66,6 +66,18 @@ describe('RealtimeControlClient', () => {
     } });
     await expect(mode).resolves.toEqual(expect.objectContaining({ turn_mode: 'manual', state: 'accepted' }));
 
+    const rejectedMode = client.turnModeUpdate('turn-mode-rejected-1', 2, 'automatic');
+    expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({
+      type: 'turn_mode_update', client_request_id: 'turn-mode-rejected-1', session_generation: 2, turn_mode: 'automatic',
+    });
+    const rejectedModeAck = { type: 'ack', client_request_id: 'turn-mode-rejected-1', result: {
+      client_request_id: 'turn-mode-rejected-1', operation: 'turn_mode_update',
+      state: 'rejected', accepted: false, error: { code: 'turn_mode_rejected' },
+    } };
+    sockets[0].json(rejectedModeAck);
+    sockets[0].json(rejectedModeAck);
+    await expect(rejectedMode).resolves.toEqual(rejectedModeAck.result);
+
     const commit = client.manualAudioCommit('manual-commit-1', 2);
     expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({
       type: 'manual_audio_commit', client_request_id: 'manual-commit-1', session_generation: 2,
@@ -106,6 +118,27 @@ describe('RealtimeControlClient', () => {
       acknowledgement: 'already_applied', revision: 5, control_signal_sent: true,
     } });
     await expect(cancel).resolves.toEqual(expect.objectContaining({ revision: 5, acknowledgement: 'already_applied' }));
+    client.close();
+  });
+
+  it('rejects any broader turn mode rejection shape', async () => {
+    const socket = new FakeSocket();
+    const client = new RealtimeControlClient({
+      getToken: vi.fn(async () => null), target: 'fake', conversationId: 'hvc_1', sessionId: 'rt_1',
+      onSnapshot: vi.fn(), onEvent: vi.fn(), createSocket: () => socket as unknown as WebSocket, reconnect: false,
+    });
+    const connected = client.connect(); socket.emit('open'); await Promise.resolve();
+    socket.json({ type: 'auth.ok', principal_kind: 'development', expires_at: null });
+    socket.json({ type: 'snapshot', snapshot: { conversation_id: 'hvc_1', last_event_id: null } });
+    socket.json({ type: 'subscribed', realtime_session_id: 'rt_1', after: null, cursor_rebased: false });
+    await connected;
+
+    const mode = client.turnModeUpdate('turn-mode-rejected-broad', 2, 'manual');
+    socket.json({ type: 'ack', client_request_id: 'turn-mode-rejected-broad', result: {
+      client_request_id: 'turn-mode-rejected-broad', operation: 'turn_mode_update',
+      state: 'rejected', accepted: false, error: { code: 'turn_mode_rejected' }, extra: true,
+    } });
+    await expect(mode).rejects.toThrow('invalid turn mode rejection');
     client.close();
   });
 

@@ -248,6 +248,19 @@ export class RealtimeControlClient {
     if (kind === 'turn_mode_update') {
       if (['in_progress', 'outcome_unknown'].includes(String(result.state))) {
         if (result.accepted !== false || (result.operation !== undefined && result.operation !== kind)) throw new Error('Hermes returned an invalid turn mode acknowledgement');
+      } else if (result.state === 'rejected') {
+        const error = result.error;
+        const keys = Object.keys(result).sort().join(',');
+        if (
+          keys !== 'accepted,client_request_id,error,operation,state'
+          || result.operation !== kind
+          || result.accepted !== false
+          || !error
+          || typeof error !== 'object'
+          || Array.isArray(error)
+          || Object.keys(error).join(',') !== 'code'
+          || (error as Record<string, unknown>).code !== 'turn_mode_rejected'
+        ) throw new Error('Hermes returned an invalid turn mode rejection');
       } else if (
         result.state !== 'accepted'
         || result.realtime_session_id !== this.options.sessionId

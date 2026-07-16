@@ -80,7 +80,7 @@ describe('useRealtimeSession approval and identity ownership', () => {
     mocks.createSession.mockReset();
     mocks.createSession.mockImplementation(async (input: Record<string, unknown>) => ({
       contract_version: '1.0', realtime_session_id: `rt_${String(input.conversationId)}`,
-      conversation_id: input.conversationId, session_generation: 1, state: 'active',
+      conversation_id: input.conversationId, session_generation: mocks.createSession.mock.calls.length, state: 'active',
       answer_sdp: 'v=0', client_request_id: input.clientRequestId,
     }));
     mocks.manualCommit.mockReset();
@@ -175,6 +175,41 @@ describe('useRealtimeSession approval and identity ownership', () => {
     expect(result.current.muted).toBe(true);
     expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
     expect(mocks.turnMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the effective mode unchanged and visibly fails closed on the exact durable mode rejection', async () => {
+    const rejected = deferred<Record<string, unknown>>();
+    mocks.turnMode.mockReturnValueOnce(rejected.promise);
+    const { result } = renderHook(() => useRealtimeSession({
+      enabled: true, target: 'fake', conversationId: 'hvc_1', getToken,
+    }));
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.setManualTurnTaking(true);
+      duplicate = result.current.setManualTurnTaking(true);
+    });
+    expect(first).toBe(duplicate);
+    expect(mocks.turnMode).toHaveBeenCalledTimes(1);
+    rejected.resolve({
+      client_request_id: 'turn-mode-rejected-1', operation: 'turn_mode_update',
+      state: 'rejected', accepted: false, error: { code: 'turn_mode_rejected' },
+    });
+    await act(async () => {
+      await expect(first).rejects.toThrow('rejected the turn mode change');
+    });
+    expect(result.current.manualTurnTaking).toBe(false);
+    expect(result.current.muted).toBe(true);
+    expect(result.current.state).toBe('degraded');
+    expect(result.current.stateDetail).toContain('rejected the turn mode change');
+    expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+    await expect(result.current.setManualTurnTaking(true)).rejects.toThrow('Reconnect this Realtime call');
+    expect(mocks.turnMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await result.current.connect(); });
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    expect(mocks.createSession).toHaveBeenCalledTimes(2);
   });
 
   it('mutes before one stable manual commit and restores automatic mode only after ack', async () => {
@@ -309,9 +344,21 @@ describe('useRealtimeSession approval and identity ownership', () => {
     expect(mocks.manualDiscard).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(result.current.manualCaptureState).toBe('error'));
     expect(result.current.manualCaptureRetryable).toBe(false);
+    expect(result.current.state).toBe('degraded');
+    await expect(result.current.setManualTurnTaking(false)).rejects.toThrow('Reconnect this Realtime call');
+    expect(mocks.turnMode).toHaveBeenCalledTimes(1);
     act(() => result.current.startManualTurn());
     expect(result.current.manualCaptureState).toBe('error');
     expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+    expect(result.current.projection.workerJobs.job_old).toBeDefined();
+
+    await act(async () => { await result.current.connect(); });
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    expect(result.current.manualCaptureState).toBe('idle');
+    expect(result.current.manualCaptureError).toBeUndefined();
+    expect(result.current.projection.workerJobs.job_old).toBeDefined();
+    expect(mocks.createSession).toHaveBeenCalledTimes(2);
+    await expect(mocks.createSession.mock.results[1].value).resolves.toEqual(expect.objectContaining({ session_generation: 2 }));
   });
 
   it('treats Start recording as an explicit unmute action for a user-muted manual call', async () => {

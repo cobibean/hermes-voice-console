@@ -77,15 +77,27 @@ export interface RealtimeManualAudioDiscardResult {
   audio_discard_requested?: true;
   error?: { code: 'audio_discard_rejected' };
 }
-export interface RealtimeTurnModeResult {
-  client_request_id: string;
-  operation?: 'turn_mode_update';
-  state: 'accepted' | 'in_progress' | 'outcome_unknown';
-  accepted?: boolean;
-  realtime_session_id?: string;
-  session_generation?: number;
-  turn_mode?: 'automatic' | 'manual';
-}
+export type RealtimeTurnModeResult =
+  | {
+    client_request_id: string;
+    state: 'accepted';
+    realtime_session_id: string;
+    session_generation: number;
+    turn_mode: 'automatic' | 'manual';
+  }
+  | {
+    client_request_id: string;
+    operation?: 'turn_mode_update';
+    state: 'in_progress' | 'outcome_unknown';
+    accepted: false;
+  }
+  | {
+    client_request_id: string;
+    operation: 'turn_mode_update';
+    state: 'rejected';
+    accepted: false;
+    error: { code: 'turn_mode_rejected' };
+  };
 export interface RealtimeWorkerCommandResult {
   command_id: string;
   worker_job_id: string;
