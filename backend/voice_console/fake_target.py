@@ -596,6 +596,19 @@ def create_fake_hermes_app() -> FastAPI:
             app.state.realtime_control_calls[key] = (
                 app.state.realtime_control_calls.get(key, 0) + 1
             )
+            if request_id.startswith("reject_turn_mode"):
+                result = overridden(
+                    operation,
+                    {
+                        "client_request_id": request_id,
+                        "operation": operation,
+                        "state": "rejected",
+                        "accepted": False,
+                        "error": {"code": "turn_mode_rejected"},
+                    },
+                )
+                app.state.realtime_requests[(conversation_id, request_id)] = result
+                return JSONResponse(status_code=409, content=result)
             document["turn_mode"] = turn_mode
             result = {
                 "client_request_id": request_id,

@@ -44,6 +44,11 @@
       "types": {"client_request_id": "string", "realtime_session_id": "string", "session_generation": "integer", "turn_mode": "string", "state": "string"},
       "constants": {"state": "accepted"}
     },
+    "turn_mode_update_rejected": {
+      "keys": ["client_request_id", "operation", "state", "accepted", "error"],
+      "types": {"client_request_id": "string", "operation": "string", "state": "string", "accepted": "boolean", "error": "object"},
+      "constants": {"operation": "turn_mode_update", "state": "rejected", "accepted": false, "error": {"code": "turn_mode_rejected"}}
+    },
     "worker_command": {
       "keys": ["command_id", "worker_job_id", "acknowledgement", "revision", "operation", "control_signal_sent"],
       "types": {"command_id": "string", "worker_job_id": "string", "acknowledgement": "string", "revision": "integer", "operation": "string", "control_signal_sent": "boolean"}

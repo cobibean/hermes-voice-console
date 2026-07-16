@@ -230,6 +230,25 @@ def parse_turn_mode_result(
         client_request_id=client_request_id,
         operation="turn_mode_update",
     )
+    if document.get("state") == "rejected":
+        error = document.get("error")
+        if (
+            set(document)
+            != {"client_request_id", "operation", "state", "accepted", "error"}
+            or document.get("operation") != "turn_mode_update"
+            or document.get("accepted") is not False
+            or not isinstance(error, Mapping)
+            or set(error) != {"code"}
+            or error.get("code") != "turn_mode_rejected"
+        ):
+            _invalid("turn mode rejection")
+        return {
+            "client_request_id": client_request_id,
+            "operation": "turn_mode_update",
+            "state": "rejected",
+            "accepted": False,
+            "error": {"code": "turn_mode_rejected"},
+        }
     if _id(document, "realtime_session_id") != session_id:
         _mismatch("session")
     if document.get("session_generation") != session_generation:

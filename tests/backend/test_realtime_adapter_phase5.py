@@ -264,6 +264,19 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
         fake.state.realtime_requests[(conversation_id, "reject_discard_shape_1")],
         shapes["manual_audio_discard_rejected"],
     )
+    rejected_turn_mode = client.post(
+        f"/api/realtime/sessions/{session_id}/turn-mode?target=fake",
+        json={
+            "client_request_id": "reject_turn_mode_shape_1",
+            "session_generation": generation,
+            "turn_mode": "automatic",
+        },
+    )
+    assert rejected_turn_mode.status_code == 409
+    assert_phase4_shape(
+        fake.state.realtime_requests[(conversation_id, "reject_turn_mode_shape_1")],
+        shapes["turn_mode_update_rejected"],
+    )
 
     unknown = client.post(
         f"/api/realtime/sessions/{session_id}/interrupt?target=fake",
@@ -775,6 +788,25 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
         }
         socket.send_json(
             {
+                "type": "turn_mode_update",
+                "client_request_id": "reject_turn_mode_ws_1",
+                "session_generation": session["session_generation"],
+                "turn_mode": "automatic",
+            }
+        )
+        assert socket.receive_json() == {
+            "type": "ack",
+            "client_request_id": "reject_turn_mode_ws_1",
+            "result": {
+                "client_request_id": "reject_turn_mode_ws_1",
+                "operation": "turn_mode_update",
+                "state": "rejected",
+                "accepted": False,
+                "error": {"code": "turn_mode_rejected"},
+            },
+        }
+        socket.send_json(
+            {
                 "type": "manual_audio_discard",
                 "client_request_id": "ws_discard_1",
                 "session_generation": session["session_generation"],
@@ -1083,6 +1115,36 @@ def test_manual_controls_are_typed_idempotent_and_reconciled(console):
     assert app.state.fake_hermes_app.state.realtime_control_calls[
         ("turn_mode_update", session_id)
     ] == 1
+
+    rejected_mode_body = {
+        "client_request_id": "reject_turn_mode_manual_1",
+        "session_generation": generation,
+        "turn_mode": "automatic",
+    }
+    rejected_mode = client.post(
+        f"{base}/turn-mode?target=fake", json=rejected_mode_body
+    )
+    rejected_mode_duplicate = client.post(
+        f"{base}/turn-mode?target=fake", json=rejected_mode_body
+    )
+    expected_mode_rejection = {
+        "client_request_id": "reject_turn_mode_manual_1",
+        "operation": "turn_mode_update",
+        "state": "rejected",
+        "accepted": False,
+        "error": {"code": "turn_mode_rejected"},
+    }
+    assert rejected_mode.status_code == rejected_mode_duplicate.status_code == 409
+    assert rejected_mode.json() == rejected_mode_duplicate.json() == expected_mode_rejection
+    assert app.state.fake_hermes_app.state.realtime_control_calls[
+        ("turn_mode_update", session_id)
+    ] == 2
+    mode_lookup = client.get(
+        f"/api/realtime/conversations/{conversation_id}/requests/"
+        "reject_turn_mode_manual_1?target=fake"
+    )
+    assert mode_lookup.status_code == 200
+    assert mode_lookup.json() == expected_mode_rejection
 
     commit_body = {
         "client_request_id": "commit_manual_1",
@@ -1509,6 +1571,38 @@ def test_compromised_mutation_results_are_rejected_before_cache(console):
     )
     assert duplicate_input.status_code == 502
     fake.state.realtime_overrides.pop("input")
+
+    fake.state.realtime_overrides["turn_mode_update"] = {
+        "error": {"code": "wrong_rejection"}
+    }
+    wrong_turn_mode_rejection = client.post(
+        f"/api/realtime/sessions/{session_id}/turn-mode?target=fake",
+        json={
+            "client_request_id": "reject_turn_mode_wrong_code_1",
+            "session_generation": generation,
+            "turn_mode": "manual",
+        },
+    )
+    assert wrong_turn_mode_rejection.status_code == 502
+    assert (
+        wrong_turn_mode_rejection.json()["error"]["code"]
+        == "invalid_target_response"
+    )
+    fake.state.realtime_overrides["turn_mode_update"] = {"unexpected": True}
+    extra_turn_mode_rejection = client.post(
+        f"/api/realtime/sessions/{session_id}/turn-mode?target=fake",
+        json={
+            "client_request_id": "reject_turn_mode_extra_field_1",
+            "session_generation": generation,
+            "turn_mode": "manual",
+        },
+    )
+    assert extra_turn_mode_rejection.status_code == 502
+    assert (
+        extra_turn_mode_rejection.json()["error"]["code"]
+        == "invalid_target_response"
+    )
+    fake.state.realtime_overrides.pop("turn_mode_update")
 
     fake.state.realtime_overrides["interrupt"] = {"realtime_session_id": "rt_wrong"}
     interrupt = client.post(

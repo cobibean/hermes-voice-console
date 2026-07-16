@@ -819,6 +819,17 @@ class RealtimeProxyService:
                 client_request_id=request_id,
                 turn_mode=turn_mode,
             )
+        elif (
+            raw.get("operation") == "turn_mode_update"
+            and raw.get("state") == "rejected"
+        ):
+            result = parse_turn_mode_result(
+                raw,
+                session_id="rejected",
+                session_generation=1,
+                client_request_id=request_id,
+                turn_mode="rejected",
+            )
         elif raw.get("interrupted") is True:
             session_id = validate_identifier(
                 str(raw.get("realtime_session_id") or ""), "realtime_session_id"

@@ -59,6 +59,10 @@ Manual audio discard clears staged input without requesting a response and retur
 `audio_discard_requested: true`. It uses the same durable duplicate, rejection, and ambiguous-result
 reconciliation rules as commit. Clients serialize capture teardown before requesting automatic
 mode; if capture is still active, the proxy preserves Hermes' authoritative HTTP 409.
+A correlated turn-mode refusal is also durable: HTTP returns the exact
+`{client_request_id, operation: "turn_mode_update", state: "rejected", accepted: false, error: {code: "turn_mode_rejected"}}`
+result with status 409, while WebSocket control returns it inside the standard acknowledgement.
+Exact duplicates and request-result lookup replay that same result without another provider action.
 
 Errors use `{error: {code, message}}`. Provider and target exception text is never reflected.
 Request bodies, SDP, response documents, cursor lengths, and target request durations are bounded.
