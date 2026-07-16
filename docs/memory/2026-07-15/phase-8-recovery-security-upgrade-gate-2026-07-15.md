@@ -85,6 +85,8 @@ Additional authoritative-boundary proof:
 
 One transient manual-discard transport failure was triaged as a possible race instead of being ignored. The exact backend discard/restart case passed 20 consecutive runs, and all four frontend discard/reconnect cases passed 20 consecutive runs (80 assertions across those repeated files). No deterministic failure reproduced, so no timing workaround was added; the staging telemetry gate must still watch for a real 502 recurrence.
 
+Chromium's synthetic microphone twice produced an explicit zero-byte capture late in the full serial browser suite while the same test passed alone. The Playwright case now retries only that exact `no audio captured` outcome, at most twice, without weakening the product's empty-audio rejection. Five focused repetitions and the final 8-case suite passed after the harness correction.
+
 ## External and human gates not claimed here
 
 These checks require the later staging/acceptance phase and are not replaced by deterministic tests:

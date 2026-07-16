@@ -252,12 +252,19 @@ test('recovers a run when the browser disconnects before receiving the run id', 
 
 test('supports tap-to-record and handles denied microphone permission', async ({ browser }) => {
   const voice = await openConsole(browser, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  const record = voice.page.getByRole('button', { name: 'Start recording' });
-  await record.click();
-  await expect(voice.page.getByRole('button', { name: 'Send recording' })).toBeVisible();
-  await voice.page.waitForTimeout(700);
-  await voice.page.getByRole('button', { name: 'Send recording' }).click();
-  await expect(voice.page.locator('.message.user').filter({ hasText: 'browser microphone turn' })).toBeVisible();
+  const userTurn = voice.page.locator('.message.user').filter({ hasText: 'browser microphone turn' });
+  for (let attempt = 0; attempt < 3 && await userTurn.count() === 0; attempt += 1) {
+    await voice.page.getByRole('button', { name: 'Start recording' }).click();
+    await expect(voice.page.getByRole('button', { name: 'Send recording' })).toBeVisible();
+    await voice.page.waitForTimeout(900);
+    await voice.page.getByRole('button', { name: 'Send recording' }).click();
+    await expect.poll(async () => {
+      if (await userTurn.count()) return 'accepted';
+      const errors = await voice.page.locator('.error').allTextContents();
+      return errors.some((value) => value.includes('no audio captured')) ? 'empty_fake_device' : 'pending';
+    }).not.toBe('pending');
+  }
+  await expect(userTurn).toBeVisible();
   await expect(voice.page.locator('.message.assistant').filter({ hasText: 'Fake response to: browser microphone turn' })).toBeVisible();
 
   await voice.page.getByRole('button', { name: 'Start recording' }).click();
