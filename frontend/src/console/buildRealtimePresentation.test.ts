@@ -9,11 +9,12 @@ function session(overrides: Partial<RealtimeSessionController> = {}): RealtimeSe
     stateDetail: undefined, muted: false, manualTurnTaking: false, projection: emptyRealtimeProjection,
     connect: async () => undefined, close: () => undefined, setMuted: () => undefined,
     manualControlsAvailable: false, setManualTurnTaking: async () => undefined,
-    startManualTurn: () => undefined, stopManualTurn: () => undefined, discardManualTurn: () => undefined,
+    startManualTurn: () => undefined, stopManualTurn: () => undefined, discardManualTurn: async () => undefined,
     commitManualTurn: async () => undefined, manualCaptureError: undefined,
     sendInput: async () => undefined, interruptSpeech: async () => undefined, resolveApproval: async () => undefined,
     submittingApprovalId: null, workerCommand: async () => undefined, ...overrides,
     manualCaptureState: overrides.manualCaptureState ?? 'idle',
+    manualCaptureRetryable: overrides.manualCaptureRetryable ?? true,
   };
 }
 

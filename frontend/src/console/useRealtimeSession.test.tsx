@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   compatibility: vi.fn(),
   createSession: vi.fn(),
   manualCommit: vi.fn(),
+  manualDiscard: vi.fn(),
   turnMode: vi.fn(),
   media: [] as Array<{ setMuted: ReturnType<typeof vi.fn>; options: Record<string, any> }>,
   controls: [] as Array<{ options: Record<string, any>; isReady: boolean }>,
@@ -51,6 +52,7 @@ vi.mock('../lib/realtimeControlClient', () => ({
     close() { this.isReady = false; }
     approval(...args: unknown[]) { return mocks.approval(...args); }
     manualAudioCommit(...args: unknown[]) { return mocks.manualCommit(...args); }
+    manualAudioDiscard(...args: unknown[]) { return mocks.manualDiscard(...args); }
     turnModeUpdate(...args: unknown[]) { return mocks.turnMode(...args); }
     input = vi.fn(async () => ({ accepted: true }));
     interrupt = vi.fn(async () => ({ interrupted: true }));
@@ -67,7 +69,7 @@ function deferred<T>() {
 const getToken = async () => null;
 const supportedCompatibility = {
   compatible: true, version: '1.0', reasons: [],
-  contract: { sessions: { manual_audio_commit: true, turn_mode_update: true, turn_modes: ['server_vad', 'manual'] } },
+  contract: { sessions: { manual_audio_commit: true, manual_audio_discard: true, turn_mode_update: true, turn_modes: ['server_vad', 'manual'] } },
 };
 
 describe('useRealtimeSession approval and identity ownership', () => {
@@ -82,6 +84,7 @@ describe('useRealtimeSession approval and identity ownership', () => {
       answer_sdp: 'v=0', client_request_id: input.clientRequestId,
     }));
     mocks.manualCommit.mockReset();
+    mocks.manualDiscard.mockReset();
     mocks.turnMode.mockReset();
     mocks.controls.length = 0;
     mocks.media.length = 0;
@@ -90,7 +93,7 @@ describe('useRealtimeSession approval and identity ownership', () => {
   it('requires every advertised manual-turn contract key', () => {
     expect(supportsManualTurnControls({
       compatible: true, version: '1.0', reasons: [],
-      contract: { sessions: { manual_audio_commit: true, turn_mode_update: true, turn_modes: ['server_vad', 'manual'] } },
+      contract: { sessions: { manual_audio_commit: true, manual_audio_discard: true, turn_mode_update: true, turn_modes: ['server_vad', 'manual'] } },
     })).toBe(true);
     expect(supportsManualTurnControls({
       compatible: true, version: '1.0', reasons: [],
@@ -259,26 +262,92 @@ describe('useRealtimeSession approval and identity ownership', () => {
     expect(mocks.manualCommit).toHaveBeenCalledTimes(1);
   });
 
-  it('does not commit a discarded capture or a late release after a conversation switch', async () => {
+  it('waits for authoritative discard before clearing and requires a fresh capture before commit', async () => {
     mocks.turnMode.mockResolvedValue({ state: 'accepted', turn_mode: 'manual' });
+    const discardAck = deferred<Record<string, unknown>>();
+    mocks.manualDiscard.mockReturnValueOnce(discardAck.promise);
+    const { result } = renderHook(() => useRealtimeSession({
+      enabled: true, target: 'fake', conversationId: 'hvc_1', getToken,
+    }));
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    await act(async () => { await result.current.setManualTurnTaking(true); });
+    act(() => result.current.startManualTurn());
+    let discard!: Promise<void>;
+    act(() => { discard = result.current.discardManualTurn(); });
+    expect(result.current.manualCaptureState).toBe('discarding');
+    expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+    await expect(result.current.setManualTurnTaking(false)).rejects.toThrow('Finish or discard');
+    expect(mocks.manualCommit).not.toHaveBeenCalled();
+    discardAck.resolve({ state: 'accepted', audio_discard_requested: true });
+    await act(async () => { await discard; });
+    expect(result.current.manualCaptureState).toBe('idle');
+    await expect(result.current.commitManualTurn()).rejects.toThrow('Start recording');
+
+    mocks.manualCommit.mockResolvedValueOnce({ state: 'accepted' });
+    act(() => result.current.startManualTurn());
+    await act(async () => { await result.current.commitManualTurn(); });
+    expect(mocks.manualDiscard.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.manualCommit.mock.invocationCallOrder[0]);
+  });
+
+  it.each([
+    [{ state: 'rejected', operation: 'manual_audio_discard', accepted: false, error: { code: 'audio_discard_rejected' } }, 'could not discard'],
+    [{ state: 'outcome_unknown', operation: 'manual_audio_discard', accepted: false }, 'not be retried automatically'],
+  ])('keeps failed or unknown discard visible without automatic retry %#', async (ack, message) => {
+    mocks.turnMode.mockResolvedValueOnce({ state: 'accepted', turn_mode: 'manual' });
+    mocks.manualDiscard.mockResolvedValueOnce(ack);
+    const { result } = renderHook(() => useRealtimeSession({
+      enabled: true, target: 'fake', conversationId: 'hvc_1', getToken,
+    }));
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    await act(async () => { await result.current.setManualTurnTaking(true); });
+    act(() => result.current.startManualTurn());
+    const first = result.current.discardManualTurn();
+    const duplicate = result.current.discardManualTurn();
+    expect(first).toBe(duplicate);
+    await expect(first).rejects.toThrow(message);
+    expect(mocks.manualDiscard).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.manualCaptureState).toBe('error'));
+    expect(result.current.manualCaptureRetryable).toBe(false);
+    act(() => result.current.startManualTurn());
+    expect(result.current.manualCaptureState).toBe('error');
+    expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+  });
+
+  it('treats Start recording as an explicit unmute action for a user-muted manual call', async () => {
+    mocks.turnMode.mockResolvedValueOnce({ state: 'accepted', turn_mode: 'manual' });
+    const { result } = renderHook(() => useRealtimeSession({
+      enabled: true, target: 'fake', conversationId: 'hvc_1', getToken,
+    }));
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    await act(async () => { await result.current.setManualTurnTaking(true); });
+    act(() => result.current.setMuted(true));
+    expect(result.current.muted).toBe(true);
+    act(() => result.current.startManualTurn());
+    expect(result.current.manualCaptureState).toBe('capturing');
+    expect(result.current.muted).toBe(false);
+    expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(false);
+  });
+
+  it('fences a late discard acknowledgement after a target switch', async () => {
+    mocks.turnMode.mockResolvedValueOnce({ state: 'accepted', turn_mode: 'manual' });
+    const discardAck = deferred<Record<string, unknown>>();
+    mocks.manualDiscard.mockReturnValueOnce(discardAck.promise);
     const { result, rerender } = renderHook(
-      ({ conversationId }) => useRealtimeSession({ enabled: true, target: 'fake', conversationId, getToken }),
-      { initialProps: { conversationId: 'hvc_1' } },
+      ({ target }) => useRealtimeSession({ enabled: true, target, conversationId: 'hvc_1', getToken }),
+      { initialProps: { target: 'target-a' } },
     );
     await waitFor(() => expect(result.current.state).toBe('ready'));
     await act(async () => { await result.current.setManualTurnTaking(true); });
-    act(() => {
-      result.current.startManualTurn();
-      result.current.discardManualTurn();
-    });
-    await expect(result.current.commitManualTurn()).rejects.toThrow('Start recording');
-    expect(mocks.manualCommit).not.toHaveBeenCalled();
-
     act(() => result.current.startManualTurn());
-    const lateRelease = result.current.commitManualTurn;
-    rerender({ conversationId: 'hvc_2' });
-    await expect(lateRelease()).rejects.toThrow(/not ready|previous|Start recording/);
-    expect(mocks.manualCommit).not.toHaveBeenCalled();
+    const pending = result.current.discardManualTurn();
+    rerender({ target: 'target-b' });
+    discardAck.resolve({ state: 'accepted', audio_discard_requested: true });
+    await expect(pending).rejects.toThrow('previous Realtime session');
+    expect(result.current.manualCaptureState).toBe('idle');
+    expect(result.current.manualCaptureError).toBeUndefined();
+    expect(mocks.manualDiscard).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.state).toBe('ready'));
   });
 
   it('surfaces a control reconnect during commit and never resends automatically', async () => {
@@ -295,7 +364,7 @@ describe('useRealtimeSession approval and identity ownership', () => {
     commitAck.reject(new Error('Realtime control connection closed'));
     await expect(pending).rejects.toThrow('connection closed');
     expect(mocks.manualCommit).toHaveBeenCalledTimes(1);
-    expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+    expect(mocks.media.at(-1)!.setMuted).toHaveBeenLastCalledWith(true);
   });
 
   it('synchronously resets an old manual mode before creating a new conversation call', async () => {

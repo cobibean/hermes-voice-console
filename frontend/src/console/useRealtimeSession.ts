@@ -45,15 +45,16 @@ export interface RealtimeSessionController {
   muted: boolean;
   manualTurnTaking: boolean;
   manualControlsAvailable: boolean;
-  manualCaptureState: 'idle' | 'starting' | 'capturing' | 'committing' | 'error';
+  manualCaptureState: 'idle' | 'starting' | 'capturing' | 'committing' | 'discarding' | 'error';
   manualCaptureError?: string;
+  manualCaptureRetryable: boolean;
   connect: () => Promise<void>;
   close: () => void;
   setMuted: (muted: boolean) => void;
   setManualTurnTaking: (manual: boolean) => Promise<void>;
   startManualTurn: () => void;
   stopManualTurn: () => void;
-  discardManualTurn: () => void;
+  discardManualTurn: () => Promise<void>;
   commitManualTurn: () => Promise<void>;
   sendInput: (text: string) => Promise<void>;
   interruptSpeech: () => Promise<void>;
@@ -70,10 +71,15 @@ export function supportsManualTurnControls(compatibility: RealtimeCompatibility 
   if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return false;
   const contract = sessions as Record<string, unknown>;
   return contract.manual_audio_commit === true
+    && contract.manual_audio_discard === true
     && contract.turn_mode_update === true
     && Array.isArray(contract.turn_modes)
     && contract.turn_modes.includes('server_vad')
     && contract.turn_modes.includes('manual');
+}
+
+function resultRetryableError(message: string): boolean {
+  return message.startsWith('No audio was captured.');
 }
 
 export function projectionForIdentity(
@@ -102,8 +108,9 @@ export function useRealtimeSession({
   const [muted, setMutedState] = useState(false);
   const [suspended, setSuspended] = useState(false);
   const [turnMode, setTurnMode] = useState<RealtimeTurnMode>('server_vad');
-  const [manualCaptureState, setManualCaptureState] = useState<'idle' | 'starting' | 'capturing' | 'committing' | 'error'>('idle');
+  const [manualCaptureState, setManualCaptureState] = useState<'idle' | 'starting' | 'capturing' | 'committing' | 'discarding' | 'error'>('idle');
   const [manualCaptureError, setManualCaptureError] = useState<string>();
+  const [manualCaptureRetryable, setManualCaptureRetryable] = useState(true);
   const [compatibilityTarget, setCompatibilityTarget] = useState('');
   const [submittingApprovalId, setSubmittingApprovalId] = useState<string | null>(null);
   const [projection, dispatchProjection] = useReducer(
@@ -145,7 +152,8 @@ export function useRealtimeSession({
     sessionId: string;
     generation: number;
     clientRequestId: string;
-    state: 'capturing' | 'committing' | 'complete' | 'failed';
+    state: 'capturing' | 'committing' | 'discarding' | 'complete' | 'failed';
+    discardRequestId?: string;
     promise?: Promise<void>;
   } | null>(null);
   const manualCaptureIdentityRef = useRef(identity);
@@ -175,6 +183,7 @@ export function useRealtimeSession({
     manualCaptureIdentityRef.current = identity;
     setManualCaptureState('idle');
     setManualCaptureError(undefined);
+    setManualCaptureRetryable(true);
     connectRef.current = null;
     controlRef.current?.close();
     controlRef.current = null;
@@ -301,6 +310,7 @@ export function useRealtimeSession({
     manualCaptureIdentityRef.current = identity;
     setManualCaptureState('idle');
     setManualCaptureError(undefined);
+    setManualCaptureRetryable(true);
     dispatchProjection({ type: 'reset' });
   }, [identity]);
 
@@ -344,6 +354,9 @@ export function useRealtimeSession({
     const { control, session } = required;
     const effectiveManual = modeIdentityRef.current === identity && turnModeRef.current === 'manual';
     if (manual === effectiveManual) return Promise.resolve();
+    if (manualTurnRef.current && ['capturing', 'committing', 'discarding'].includes(manualTurnRef.current.state)) {
+      return Promise.reject(new Error('Finish or discard the current manual recording before changing turn mode'));
+    }
     const epoch = operationEpochRef.current;
     const existing = modeRequestRef.current;
     if (existing) {
@@ -379,6 +392,7 @@ export function useRealtimeSession({
       manualCaptureIdentityRef.current = identity;
       setManualCaptureState('idle');
       setManualCaptureError(undefined);
+      setManualCaptureRetryable(true);
       mediaRef.current?.setMuted(manual || mutedRef.current);
     }).catch((error: unknown) => {
       if (operationEpochRef.current === epoch) {
@@ -404,13 +418,13 @@ export function useRealtimeSession({
     return promise;
   }, [currentCompatibility, identity, requireControl]);
   const startManualTurn = useCallback(() => {
+    if (manualCaptureState === 'error' && !manualCaptureRetryable) return;
     let required: ReturnType<typeof requireControl>;
     try { required = requireControl(); }
     catch { return; }
     const { control, session } = required;
     if (
       turnModeRef.current !== 'manual'
-      || mutedRef.current
       || !supportsManualTurnControls(currentCompatibility)
     ) return;
     const epoch = operationEpochRef.current;
@@ -421,7 +435,7 @@ export function useRealtimeSession({
       && existing.identity === identity
       && existing.sessionId === session.realtime_session_id
       && existing.generation === session.session_generation
-      && ['capturing', 'committing'].includes(existing.state)
+      && ['capturing', 'committing', 'discarding'].includes(existing.state)
     ) return;
     manualTurnRef.current = {
       epoch,
@@ -434,18 +448,72 @@ export function useRealtimeSession({
     manualCaptureIdentityRef.current = identity;
     setManualCaptureState('capturing');
     setManualCaptureError(undefined);
+    setManualCaptureRetryable(false);
+    mutedRef.current = false;
+    setMutedState(false);
     if (control.isReady) mediaRef.current?.setMuted(false);
-  }, [currentCompatibility, identity, requireControl]);
+  }, [currentCompatibility, identity, manualCaptureRetryable, manualCaptureState, requireControl]);
   const stopManualTurn = useCallback(() => {
     if (turnModeRef.current === 'manual') mediaRef.current?.setMuted(true);
   }, []);
-  const discardManualTurn = useCallback(() => {
+  const discardManualTurn = useCallback((): Promise<void> => {
+    let required: ReturnType<typeof requireControl>;
+    try { required = requireControl(); }
+    catch (error) { return Promise.reject(error); }
+    const { control, session } = required;
+    const operation = manualTurnRef.current;
+    const epoch = operationEpochRef.current;
+    if (
+      turnModeRef.current !== 'manual'
+      || !operation
+      || operation.epoch !== epoch
+      || operation.identity !== identity
+      || operation.sessionId !== session.realtime_session_id
+      || operation.generation !== session.session_generation
+    ) return Promise.reject(new Error('There is no manual recording to discard'));
+    if (operation.promise) return operation.promise;
     mediaRef.current?.setMuted(true);
-    manualTurnRef.current = null;
+    operation.state = 'discarding';
+    operation.discardRequestId ??= realtimeRequestId('manual-discard');
     manualCaptureIdentityRef.current = identity;
-    setManualCaptureState('idle');
+    setManualCaptureState('discarding');
     setManualCaptureError(undefined);
-  }, [identity]);
+    setManualCaptureRetryable(false);
+    const promise = control.manualAudioDiscard(operation.discardRequestId, session.session_generation)
+      .then((result) => {
+        if (result.state === 'rejected') {
+          operation.state = 'failed';
+          throw new Error('Hermes could not discard the manual recording. Reconnect before recording again.');
+        }
+        if (result.state === 'outcome_unknown' || result.state === 'in_progress') {
+          operation.state = 'complete';
+          throw new Error('Hermes could not confirm whether the manual recording was discarded. It will not be retried automatically; reconnect before recording again.');
+        }
+        if (
+          operationEpochRef.current !== epoch
+          || signatureRef.current !== identity
+          || mediaRef.current?.activeSession?.realtime_session_id !== session.realtime_session_id
+          || mediaRef.current.activeSession.session_generation !== session.session_generation
+        ) throw new Error('The manual discard belonged to a previous Realtime session');
+        operation.state = 'complete';
+        if (manualTurnRef.current === operation) manualTurnRef.current = null;
+        setManualCaptureState('idle');
+        setManualCaptureError(undefined);
+        setManualCaptureRetryable(true);
+      })
+      .catch((error: unknown) => {
+        if (operationEpochRef.current === epoch) {
+          const message = (error as Error).message;
+          setManualCaptureState('error');
+          setManualCaptureError(message);
+          setManualCaptureRetryable(false);
+          setStateDetail(message);
+        }
+        throw error;
+      });
+    operation.promise = promise;
+    return promise;
+  }, [identity, requireControl]);
   const commitManualTurn = useCallback((): Promise<void> => {
     let required: ReturnType<typeof requireControl>;
     try { required = requireControl(); }
@@ -467,6 +535,7 @@ export function useRealtimeSession({
     manualCaptureIdentityRef.current = identity;
     setManualCaptureState('committing');
     setManualCaptureError(undefined);
+    setManualCaptureRetryable(false);
     const promise = control.manualAudioCommit(operation.clientRequestId, session.session_generation)
       .then((result) => {
         if (result.state === 'rejected') {
@@ -486,6 +555,7 @@ export function useRealtimeSession({
         operation.state = 'complete';
         setManualCaptureState('idle');
         setManualCaptureError(undefined);
+        setManualCaptureRetryable(true);
       })
       .catch((error: unknown) => {
         if (operationEpochRef.current === epoch && operation.state === 'committing') operation.state = 'failed';
@@ -493,6 +563,7 @@ export function useRealtimeSession({
           const message = (error as Error).message;
           setManualCaptureState('error');
           setManualCaptureError(message);
+          setManualCaptureRetryable(resultRetryableError(message));
           setStateDetail(message);
         }
         throw error;
@@ -564,6 +635,7 @@ export function useRealtimeSession({
     manualControlsAvailable: state === 'ready' && supportsManualTurnControls(currentCompatibility),
     manualCaptureState: manualCaptureIdentityRef.current === identity ? manualCaptureState : 'idle',
     manualCaptureError: manualCaptureIdentityRef.current === identity ? manualCaptureError : undefined,
+    manualCaptureRetryable: manualCaptureIdentityRef.current === identity && manualCaptureRetryable,
     connect,
     close,
     setMuted,
@@ -577,5 +649,5 @@ export function useRealtimeSession({
     resolveApproval,
     submittingApprovalId,
     workerCommand,
-  }), [close, commitManualTurn, connect, controlState, currentCompatibility, discardManualTurn, identity, manualCaptureError, manualCaptureState, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, submittingApprovalId, turnMode, workerCommand, interruptSpeech]);
+  }), [close, commitManualTurn, connect, controlState, currentCompatibility, discardManualTurn, identity, manualCaptureError, manualCaptureRetryable, manualCaptureState, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, submittingApprovalId, turnMode, workerCommand, interruptSpeech]);
 }

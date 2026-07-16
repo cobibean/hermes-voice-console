@@ -7,6 +7,7 @@ import type {
   RealtimeInputResult,
   RealtimeInterruptResult,
   RealtimeManualAudioCommitResult,
+  RealtimeManualAudioDiscardResult,
   RealtimeSnapshot,
   RealtimeTurnModeResult,
   RealtimeWorkerCommandResult,
@@ -29,7 +30,7 @@ export interface RealtimeControlOptions {
 }
 
 type Command = Record<string, unknown> & { type: string; client_request_id: string };
-type ResultKind = 'input' | 'interrupt' | 'approval' | 'manual_audio_commit' | 'turn_mode_update' | 'worker';
+type ResultKind = 'input' | 'interrupt' | 'approval' | 'manual_audio_commit' | 'manual_audio_discard' | 'turn_mode_update' | 'worker';
 interface PendingCommand {
   kind: ResultKind;
   command: Command;
@@ -231,6 +232,19 @@ export class RealtimeControlClient {
         || result.response_requested !== true
       ) throw new Error('Hermes returned an invalid manual audio acknowledgement');
     }
+    if (kind === 'manual_audio_discard') {
+      if (['in_progress', 'outcome_unknown'].includes(String(result.state))) {
+        if (result.accepted !== false || (result.operation !== undefined && result.operation !== kind)) throw new Error('Hermes returned an invalid manual discard acknowledgement');
+      } else if (result.state === 'rejected') {
+        const error = result.error;
+        if (result.accepted !== false || result.operation !== kind || !error || typeof error !== 'object' || (error as Record<string, unknown>).code !== 'audio_discard_rejected') throw new Error('Hermes returned an invalid manual discard rejection');
+      } else if (
+        result.state !== 'accepted'
+        || result.realtime_session_id !== this.options.sessionId
+        || result.session_generation !== command.session_generation
+        || result.audio_discard_requested !== true
+      ) throw new Error('Hermes returned an invalid manual discard acknowledgement');
+    }
     if (kind === 'turn_mode_update') {
       if (['in_progress', 'outcome_unknown'].includes(String(result.state))) {
         if (result.accepted !== false || (result.operation !== undefined && result.operation !== kind)) throw new Error('Hermes returned an invalid turn mode acknowledgement');
@@ -306,6 +320,9 @@ export class RealtimeControlClient {
   }
   async manualAudioCommit(clientRequestId: string, sessionGeneration: number): Promise<RealtimeManualAudioCommitResult> {
     return await this.send({ type: 'manual_audio_commit', client_request_id: clientRequestId, session_generation: sessionGeneration }, 'manual_audio_commit') as unknown as RealtimeManualAudioCommitResult;
+  }
+  async manualAudioDiscard(clientRequestId: string, sessionGeneration: number): Promise<RealtimeManualAudioDiscardResult> {
+    return await this.send({ type: 'manual_audio_discard', client_request_id: clientRequestId, session_generation: sessionGeneration }, 'manual_audio_discard') as unknown as RealtimeManualAudioDiscardResult;
   }
   async turnModeUpdate(clientRequestId: string, sessionGeneration: number, turnMode: 'automatic' | 'manual'): Promise<RealtimeTurnModeResult> {
     return await this.send({ type: 'turn_mode_update', client_request_id: clientRequestId, session_generation: sessionGeneration, turn_mode: turnMode }, 'turn_mode_update') as unknown as RealtimeTurnModeResult;

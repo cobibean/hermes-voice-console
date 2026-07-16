@@ -76,6 +76,16 @@ describe('RealtimeControlClient', () => {
     } });
     await expect(commit).resolves.toEqual(expect.objectContaining({ state: 'accepted', response_requested: true }));
 
+    const discard = client.manualAudioDiscard('manual-discard-1', 2);
+    expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({
+      type: 'manual_audio_discard', client_request_id: 'manual-discard-1', session_generation: 2,
+    });
+    sockets[0].json({ type: 'ack', client_request_id: 'manual-discard-1', result: {
+      client_request_id: 'manual-discard-1', realtime_session_id: 'rt_1', session_generation: 2,
+      state: 'accepted', audio_discard_requested: true,
+    } });
+    await expect(discard).resolves.toEqual(expect.objectContaining({ state: 'accepted', audio_discard_requested: true }));
+
     const worker = client.workerCommand('worker-command-1', 'job_1', 'refine', 3, { context: 'Use the safer path' });
     sockets[0].json({ type: 'ack', client_request_id: 'worker-command-1', result: {
       command_id: 'worker-command-1', worker_job_id: 'job_1', operation: 'refine',
@@ -124,6 +134,27 @@ describe('RealtimeControlClient', () => {
     } });
     await expect(unknown).resolves.toEqual(expect.objectContaining({ state: 'outcome_unknown' }));
     expect(socket.sent.filter((value) => JSON.parse(value).client_request_id === 'manual-unknown-1')).toHaveLength(1);
+    client.close();
+  });
+
+  it.each([
+    [{ client_request_id: 'discard-result-1', operation: 'manual_audio_discard', state: 'rejected', accepted: false, error: { code: 'audio_discard_rejected' } }, 'rejected'],
+    [{ client_request_id: 'discard-result-1', operation: 'manual_audio_discard', state: 'outcome_unknown', accepted: false }, 'outcome_unknown'],
+  ])('accepts exact durable manual discard %s result without replay', async (result, state) => {
+    const socket = new FakeSocket();
+    const client = new RealtimeControlClient({
+      getToken: vi.fn(async () => null), target: 'fake', conversationId: 'hvc_1', sessionId: 'rt_1',
+      onSnapshot: vi.fn(), onEvent: vi.fn(), createSocket: () => socket as unknown as WebSocket, reconnect: false,
+    });
+    const connected = client.connect(); socket.emit('open'); await Promise.resolve();
+    socket.json({ type: 'auth.ok', principal_kind: 'development', expires_at: null });
+    socket.json({ type: 'snapshot', snapshot: { conversation_id: 'hvc_1', last_event_id: null } });
+    socket.json({ type: 'subscribed', realtime_session_id: 'rt_1', after: null, cursor_rebased: false });
+    await connected;
+    const discard = client.manualAudioDiscard('discard-result-1', 1);
+    socket.json({ type: 'ack', client_request_id: 'discard-result-1', result });
+    await expect(discard).resolves.toEqual(expect.objectContaining({ state }));
+    expect(socket.sent.filter((value) => JSON.parse(value).client_request_id === 'discard-result-1')).toHaveLength(1);
     client.close();
   });
 

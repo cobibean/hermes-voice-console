@@ -130,6 +130,7 @@ export function useConsoleController({
   const lastSequenceRef = useRef(0);
   const pendingTextTurnRef = useRef<{ turnId: string; text: string } | null>(null);
   const feedSequenceRef = useRef(0);
+  const controllerEpochRef = useRef(0);
   const conversationIdentity = `${selectedTarget}|${sessionKey}`;
   const historyIdentityRef = useRef('');
   const selectedTargetConfig = bootstrap?.targets.find((target) => target.name === selectedTarget);
@@ -156,9 +157,22 @@ export function useConsoleController({
   });
 
   const closeClient = useCallback(() => {
+    controllerEpochRef.current += 1;
     legacySession.close();
     realtimeSession.close();
   }, [legacySession.close, realtimeSession.close]);
+
+  const runOwnedRealtimeOperation = useCallback((operation: () => Promise<void>) => {
+    const epoch = controllerEpochRef.current;
+    const owner = conversationIdentity;
+    let pending: Promise<void>;
+    try { pending = operation(); }
+    catch (error) { pending = Promise.reject(error); }
+    void pending.catch((error: unknown) => {
+      if (controllerEpochRef.current !== epoch || `${selectedTarget}|${sessionKey}` !== owner) return;
+      dispatch({ type: 'error', message: (error as Error).message });
+    });
+  }, [conversationIdentity, selectedTarget, sessionKey]);
 
   useEffect(() => {
     const first = bootstrap?.targets[0];
@@ -435,11 +449,10 @@ export function useConsoleController({
     dispatch({ type: 'recording.stop' });
     if (transport === 'realtime') {
       realtimeSession.stopManualTurn();
-      void realtimeSession.commitManualTurn()
-        .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
+      runOwnedRealtimeOperation(realtimeSession.commitManualTurn);
     }
     else legacySession.stopRecording(turnId);
-  }, [legacySession.stopRecording, realtimeSession.commitManualTurn, realtimeSession.stopManualTurn, state.activeTurnId, state.recording, transport]);
+  }, [legacySession.stopRecording, realtimeSession.commitManualTurn, realtimeSession.stopManualTurn, runOwnedRealtimeOperation, state.activeTurnId, state.recording, transport]);
 
   const discardRecording = useCallback(() => {
     const turnId = activeTurnIdRef.current ?? state.activeTurnId;
@@ -579,9 +592,17 @@ export function useConsoleController({
   const sendManualTurn = useCallback(() => {
     realtimeSession.stopManualTurn();
     if (state.recording !== 'idle') dispatch({ type: 'recording.stop' });
-    void realtimeSession.commitManualTurn()
-      .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
-  }, [realtimeSession.commitManualTurn, realtimeSession.stopManualTurn, state.recording]);
+    runOwnedRealtimeOperation(realtimeSession.commitManualTurn);
+  }, [realtimeSession.commitManualTurn, realtimeSession.stopManualTurn, runOwnedRealtimeOperation, state.recording]);
+  const discardManualTurn = useCallback(() => {
+    runOwnedRealtimeOperation(realtimeSession.discardManualTurn);
+  }, [realtimeSession.discardManualTurn, runOwnedRealtimeOperation]);
+  const endRealtimeCall = useCallback(() => {
+    controllerEpochRef.current += 1;
+    realtimeSession.close();
+  }, [realtimeSession.close]);
+  const manualCaptureActive = ['starting', 'capturing', 'committing', 'discarding']
+    .includes(realtimeSession.manualCaptureState);
   const realtime = useMemo<RealtimePresentationModel>(() => ({
     mode: transport,
     readiness: transport === 'legacy' ? 'disconnected' : realtimeReadiness(realtimeSession),
@@ -595,17 +616,19 @@ export function useConsoleController({
     speaking: transport === 'realtime' && realtimeSession.projection.speaking,
     jobs: presentRealtimeJobs(realtimeSession, artifactAllowedOrigins),
     artifactAllowedOrigins,
-    onToggleMute: transport === 'realtime' ? () => realtimeSession.setMuted(!realtimeSession.muted) : undefined,
-    onToggleManualTurnTaking: transport === 'realtime' && realtimeSession.manualControlsAvailable
+    onToggleMute: transport === 'realtime' && !manualCaptureActive
+      ? () => realtimeSession.setMuted(!realtimeSession.muted)
+      : undefined,
+    onToggleManualTurnTaking: transport === 'realtime' && realtimeSession.manualControlsAvailable && !manualCaptureActive
       ? () => {
-        void realtimeSession.setManualTurnTaking(!realtimeSession.manualTurnTaking)
-          .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
+        runOwnedRealtimeOperation(() => realtimeSession.setManualTurnTaking(!realtimeSession.manualTurnTaking));
       }
       : undefined,
     onStartManualTurn: transport === 'realtime'
       && realtimeSession.manualControlsAvailable
       && realtimeSession.manualTurnTaking
-      && ['idle', 'error'].includes(realtimeSession.manualCaptureState)
+      && (realtimeSession.manualCaptureState === 'idle'
+        || (realtimeSession.manualCaptureState === 'error' && realtimeSession.manualCaptureRetryable))
       ? realtimeSession.startManualTurn
       : undefined,
     onSendManualTurn: transport === 'realtime'
@@ -618,10 +641,10 @@ export function useConsoleController({
       && realtimeSession.manualControlsAvailable
       && realtimeSession.manualTurnTaking
       && realtimeSession.manualCaptureState === 'capturing'
-      ? realtimeSession.discardManualTurn
+      ? discardManualTurn
       : undefined,
     onInterrupt: transport === 'realtime' ? cancelSpeech : undefined,
-    onEndCall: transport === 'realtime' ? realtimeSession.close : undefined,
+    onEndCall: transport === 'realtime' ? endRealtimeCall : undefined,
     onReconnect: transport === 'realtime' ? () => { void realtimeSession.connect().catch(dispatchError); } : undefined,
     onUseLegacy: transport === 'realtime' ? () => setTransport('legacy') : undefined,
     onRequestStatus: transport === 'realtime' ? (jobId) => {
@@ -637,7 +660,7 @@ export function useConsoleController({
       if (instruction) runWorkerCommand(jobId, 'redirect', workerControlPayload('redirect', instruction));
     } : undefined,
     onCancel: transport === 'realtime' ? (jobId) => runWorkerCommand(jobId, 'cancel') : undefined,
-  }), [cancelSpeech, dispatchError, realtimeSession, sendManualTurn, setTransport, transport]);
+  }), [cancelSpeech, discardManualTurn, dispatchError, endRealtimeCall, manualCaptureActive, realtimeSession, runOwnedRealtimeOperation, sendManualTurn, setTransport, transport]);
 
   return useMemo(() => ({
     acceptanceUnknown,

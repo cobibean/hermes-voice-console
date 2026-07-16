@@ -67,6 +67,16 @@ export interface RealtimeManualAudioCommitResult {
   response_requested?: true;
   error?: { code: 'audio_buffer_empty' };
 }
+export interface RealtimeManualAudioDiscardResult {
+  client_request_id: string;
+  operation?: 'manual_audio_discard';
+  state: 'accepted' | 'rejected' | 'in_progress' | 'outcome_unknown';
+  accepted?: boolean;
+  realtime_session_id?: string;
+  session_generation?: number;
+  audio_discard_requested?: true;
+  error?: { code: 'audio_discard_rejected' };
+}
 export interface RealtimeTurnModeResult {
   client_request_id: string;
   operation?: 'turn_mode_update';
