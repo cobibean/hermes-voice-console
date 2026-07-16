@@ -5,6 +5,7 @@ export interface TargetInfo {
   api_key_configured: boolean;
   configured_provider_label?: string | null;
   configured_model_label?: string | null;
+  realtime_enabled?: boolean;
   voice?: { tts_voice?: string };
 }
 

@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { PendingApproval } from '../components/ApprovalModal';
 import { createSession, listSessions, loadSessionMessages, type AuthTokenProvider } from '../lib/api';
-import { browserSupportsCapture, startPcm16Capture, type CaptureSession } from '../lib/capture';
-import { PlaybackQueue } from '../lib/playback';
+import { browserSupportsCapture } from '../lib/capture';
 import { clearRecovery, loadRecovery, saveRecovery } from '../lib/recovery';
 import { consoleReducer, initialConsoleState, nextTurnId } from '../lib/state';
 import type { AuthMode, Bootstrap, ConversationMessage, SessionInfo, TimelineItem, VoiceServerEvent } from '../lib/types';
-import { VoiceClient } from '../lib/voiceClient';
+import type { VoiceClient } from '../lib/voiceClient';
 import { deriveConsoleViewState } from './viewState';
 import { voiceDiagnostic } from '../lib/diagnostics';
+import type { VoiceTransport } from '../lib/realtimeTypes';
+import { useLegacyVoiceSession } from './useLegacyVoiceSession';
+import { useRealtimeSession } from './useRealtimeSession';
+import { presentRealtimeJobs, realtimeReadiness } from './buildRealtimePresentation';
+import type { RealtimePresentationModel } from './realtimePresentation';
+import { mergeConversationMessages } from './conversationProjection';
 
 type ApprovalDecision = 'once' | 'session' | 'always' | 'deny';
 
@@ -54,7 +59,7 @@ export interface ConsoleController {
   bootstrap: Bootstrap | null;
   cancelSpeech: () => void;
   closeClient: () => void;
-  connect: () => Promise<VoiceClient>;
+  connect: () => Promise<VoiceClient | void>;
   connected: boolean;
   isCaptureSupported: boolean;
   loadError?: string;
@@ -84,6 +89,9 @@ export interface ConsoleController {
   timeline: TimelineItem[];
   transcript: string;
   viewState: ReturnType<typeof deriveConsoleViewState>;
+  transport: VoiceTransport;
+  setTransport: (transport: VoiceTransport) => void;
+  realtime: RealtimePresentationModel;
 }
 
 export function useConsoleController({
@@ -113,19 +121,8 @@ export function useConsoleController({
     id: string;
     message: string;
   } | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [inputLevel, setInputLevel] = useState(0);
-  const [recordingElapsed, setRecordingElapsed] = useState(0);
-  const [speechFallbackAvailable, setSpeechFallbackAvailable] = useState(false);
-  const clientRef = useRef<VoiceClient | null>(null);
-  const clientSignatureRef = useRef('');
-  const connectPromiseRef = useRef<{ signature: string; promise: Promise<VoiceClient> } | null>(null);
-  const captureRef = useRef<CaptureSession | null>(null);
-  const playbackRef = useRef(new PlaybackQueue(
-    undefined,
-    undefined,
-    setSpeechFallbackAvailable,
-  ));
+  const [transport, setTransportState] = useState<VoiceTransport>('legacy');
+  const handleEventRef = useRef<(event: VoiceServerEvent) => void>(() => undefined);
   const stopRequestedRef = useRef(false);
   const discardRequestedRef = useRef(false);
   const activeRunIdRef = useRef<string | null>(null);
@@ -133,37 +130,40 @@ export function useConsoleController({
   const lastSequenceRef = useRef(0);
   const pendingTextTurnRef = useRef<{ turnId: string; text: string } | null>(null);
   const feedSequenceRef = useRef(0);
+  const selectedTargetConfig = bootstrap?.targets.find((target) => target.name === selectedTarget);
+  const recovery = loadRecovery();
+  const dispatchError = useCallback((message: string) => dispatch({ type: 'error', message }), []);
+  const forwardLegacyEvent = useCallback((event: VoiceServerEvent) => handleEventRef.current(event), []);
+  const legacySession = useLegacyVoiceSession({
+    enabled: transport === 'legacy',
+    authMode,
+    getToken,
+    target: selectedTarget,
+    conversationId: sessionKey,
+    speakReplies,
+    resumeRunId: recovery?.target === selectedTarget && recovery.conversationId === sessionKey ? recovery.runId : undefined,
+    lastSequence: recovery?.target === selectedTarget && recovery.conversationId === sessionKey ? recovery.lastSequence : undefined,
+    onEvent: forwardLegacyEvent,
+    onError: dispatchError,
+  });
+  const realtimeSession = useRealtimeSession({
+    enabled: transport === 'realtime' && Boolean(selectedTargetConfig?.realtime_enabled),
+    target: selectedTarget,
+    conversationId: sessionKey,
+    getToken,
+  });
 
   const closeClient = useCallback(() => {
-    clientRef.current?.close();
-    clientRef.current = null;
-    clientSignatureRef.current = '';
-    connectPromiseRef.current = null;
-    setConnected(false);
-  }, []);
-
-  useEffect(() => () => {
-    closeClient();
-    void captureRef.current?.stop();
-    playbackRef.current.cancel(playbackRef.current.activeTurnId ?? '');
-  }, [closeClient]);
-
-  useEffect(() => {
-    if (state.recording !== 'recording') {
-      setInputLevel(0);
-      if (state.recording === 'idle') setRecordingElapsed(0);
-      return undefined;
-    }
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => setRecordingElapsed((Date.now() - startedAt) / 1000), 100);
-    return () => window.clearInterval(timer);
-  }, [state.recording]);
+    legacySession.close();
+    realtimeSession.close();
+  }, [legacySession.close, realtimeSession.close]);
 
   useEffect(() => {
     const first = bootstrap?.targets[0];
     if (!first) return;
     setSelectedTarget((current) => current || first.name);
     setSpeakRepliesState(bootstrap.voice.speak_replies_default);
+    setTransportState(first.realtime_enabled ? 'realtime' : 'legacy');
   }, [bootstrap]);
 
   useEffect(() => {
@@ -228,7 +228,6 @@ export function useConsoleController({
     if (hasTurnId(event) && activeTurnIdRef.current && event.turn_id !== activeTurnIdRef.current) return;
     appendEvent(event);
     dispatch({ type: 'event', event });
-    if (event.type === 'ready') setConnected(true);
     if (event.type === 'recording.started') activeTurnIdRef.current = event.turn_id;
     if (event.type === 'transcript.final') {
       setTranscript(event.text);
@@ -351,94 +350,51 @@ export function useConsoleController({
       setApproval(null);
       clearRecovery();
     }
-    if (event.type === 'tts.start') playbackRef.current.start(event.turn_id, event.chunk_index, event.mime);
-    if (event.type === 'tts.end') playbackRef.current.end(event.turn_id, event.chunk_index);
-    if (event.type === 'tts.complete') playbackRef.current.complete(event.turn_id);
-    if (event.type === 'tts.cancelled') playbackRef.current.cancel(event.turn_id);
-  }, [appendEvent, selectedTarget, sessionKey]);
+    legacySession.handlePlaybackEvent(event);
+  }, [appendEvent, legacySession.handlePlaybackEvent, selectedTarget, sessionKey]);
+  handleEventRef.current = handleEvent;
 
   const connect = useCallback(async () => {
     if (!selectedTarget || !sessionKey) throw new Error('Select a target and session first');
-    const signature = `${selectedTarget}|${sessionKey}|${speakReplies}`;
-    if (connectPromiseRef.current?.signature === signature) return connectPromiseRef.current.promise;
-    if (clientRef.current?.isOpen && clientSignatureRef.current === signature) return clientRef.current;
-    closeClient();
-    const client = new VoiceClient({
-      authMode,
-      getToken,
-      onEvent: handleEvent,
-      onAudio: (chunk) => playbackRef.current.pushChunk(chunk),
-      onClose: () => setConnected(false),
-      onError: (message) => dispatch({ type: 'error', message }),
-    });
-    const recovery = loadRecovery();
-    const canResume = recovery?.target === selectedTarget && recovery.conversationId === sessionKey;
-    clientRef.current = client;
-    clientSignatureRef.current = signature;
-    const promise = client.connect({
-      target: selectedTarget,
-      conversationId: sessionKey,
-      speakReplies,
-      resumeRunId: canResume ? recovery.runId : undefined,
-      lastSequence: canResume ? recovery.lastSequence : undefined,
-    }).then(() => client).catch((error: unknown) => {
-      if (clientRef.current === client) {
-        clientRef.current = null;
-        clientSignatureRef.current = '';
-      }
-      throw error;
-    });
-    connectPromiseRef.current = { signature, promise };
-    try {
-      return await promise;
-    } finally {
-      if (connectPromiseRef.current?.promise === promise) connectPromiseRef.current = null;
-    }
-  }, [authMode, closeClient, getToken, handleEvent, selectedTarget, sessionKey, speakReplies]);
+    if (transport === 'realtime') return realtimeSession.connect();
+    return legacySession.connect();
+  }, [legacySession.connect, realtimeSession.connect, selectedTarget, sessionKey, transport]);
 
   useEffect(() => {
-    if (!selectedTarget || !sessionKey) return;
+    if (!selectedTarget || !sessionKey || transport !== 'legacy') return;
     void connect().catch((error: unknown) => {
       voiceDiagnostic('socket.autoconnect.failed', {
         error: error instanceof Error ? error.message : 'unknown connection error',
       });
     });
-  }, [connect, selectedTarget, sessionKey]);
+  }, [connect, selectedTarget, sessionKey, transport]);
 
   const startRecording = useCallback(async () => {
     const turnId = nextTurnId();
     stopRequestedRef.current = false;
     discardRequestedRef.current = false;
-    void playbackRef.current.unlock();
     activeTurnIdRef.current = turnId;
     dispatch({ type: 'recording.start', turnId });
     try {
-      const client = await connect();
-      await client.startRecording(turnId);
+      if (transport === 'realtime') {
+        await realtimeSession.connect();
+        realtimeSession.startManualTurn();
+        return;
+      }
+      await legacySession.startRecording(turnId);
       if (discardRequestedRef.current) {
-        client.cancelRecording(turnId);
+        legacySession.discardRecording(turnId);
         dispatch({ type: 'recording.discard' });
         return;
       }
-      const capture = await startPcm16Capture((chunk) => client.sendAudio(chunk), setInputLevel);
-      captureRef.current = capture;
-      if (discardRequestedRef.current) {
-        await capture.stop();
-        captureRef.current = null;
-        if (client.isOpen) client.cancelRecording(turnId);
-        dispatch({ type: 'recording.discard' });
-      } else if (stopRequestedRef.current) {
-        await capture.stop();
-        captureRef.current = null;
-        if (client.isOpen) client.stopRecording(turnId);
+      if (stopRequestedRef.current) {
+        legacySession.stopRecording(turnId);
         dispatch({ type: 'recording.stop' });
       }
     } catch (error) {
       dispatch({ type: 'error', message: (error as Error).message });
-      await captureRef.current?.stop();
-      captureRef.current = null;
     }
-  }, [connect]);
+  }, [legacySession.discardRecording, legacySession.startRecording, legacySession.stopRecording, realtimeSession.connect, realtimeSession.startManualTurn, transport]);
 
   const submitText = useCallback(async () => {
     const text = textDraft.trim();
@@ -447,40 +403,39 @@ export function useConsoleController({
     activeTurnIdRef.current = turnId;
     pendingTextTurnRef.current = { turnId, text };
     try {
-      const client = await connect();
-      client.sendText(turnId, text);
+      if (transport === 'realtime') {
+        await realtimeSession.connect();
+        realtimeSession.sendInput(text);
+        setMessages((current) => [...current, { role: 'user', content: text }]);
+        setTextDraft('');
+        pendingTextTurnRef.current = null;
+      } else {
+        const client = await legacySession.connect();
+        client.sendText(turnId, text);
+      }
     } catch (error) {
       pendingTextTurnRef.current = null;
       dispatch({ type: 'error', message: (error as Error).message });
     }
-  }, [connect, textDraft]);
+  }, [legacySession.connect, realtimeSession.connect, realtimeSession.sendInput, textDraft, transport]);
 
   const stopRecording = useCallback(() => {
     const turnId = activeTurnIdRef.current ?? state.activeTurnId;
     if (!turnId || state.recording === 'idle') return;
     stopRequestedRef.current = true;
     dispatch({ type: 'recording.stop' });
-    const capture = captureRef.current;
-    captureRef.current = null;
-    if (!capture) return;
-    void capture.stop().finally(() => {
-      if (clientRef.current?.isOpen) clientRef.current.stopRecording(turnId);
-    });
-  }, [state.activeTurnId, state.recording]);
+    if (transport === 'realtime') realtimeSession.stopManualTurn();
+    else legacySession.stopRecording(turnId);
+  }, [legacySession.stopRecording, realtimeSession.stopManualTurn, state.activeTurnId, state.recording, transport]);
 
   const discardRecording = useCallback(() => {
     const turnId = activeTurnIdRef.current ?? state.activeTurnId;
     discardRequestedRef.current = true;
     stopRequestedRef.current = false;
     dispatch({ type: 'recording.discard' });
-    const capture = captureRef.current;
-    captureRef.current = null;
-    setInputLevel(0);
-    void capture?.stop().finally(() => {
-      if (turnId && clientRef.current?.isOpen) clientRef.current.cancelRecording(turnId);
-    });
-    if (!capture && turnId && clientRef.current?.isOpen) clientRef.current.cancelRecording(turnId);
-  }, [state.activeTurnId]);
+    if (transport === 'realtime') realtimeSession.stopManualTurn();
+    else if (turnId) legacySession.discardRecording(turnId);
+  }, [legacySession.discardRecording, realtimeSession.stopManualTurn, state.activeTurnId, transport]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -489,7 +444,7 @@ export function useConsoleController({
       }
     };
     const onPageShow = (event: PageTransitionEvent) => {
-      if (event.persisted || !clientRef.current?.isOpen) void connect().catch(() => undefined);
+      if (event.persisted) void connect().catch(() => undefined);
     };
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pageshow', onPageShow);
@@ -500,41 +455,63 @@ export function useConsoleController({
   }, [connect, discardRecording, state.recording]);
 
   const cancelSpeech = useCallback(() => {
-    const turnId = playbackRef.current.activeTurnId ?? activeTurnIdRef.current ?? '';
-    playbackRef.current.cancel(turnId);
-    if (turnId) clientRef.current?.cancelTts(turnId);
+    if (transport === 'realtime') {
+      try { realtimeSession.interruptSpeech(); }
+      catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+    }
+    else legacySession.cancelSpeech(activeTurnIdRef.current ?? '');
     dispatch({ type: 'playback.cancel' });
-  }, []);
+  }, [legacySession.cancelSpeech, realtimeSession.interruptSpeech, transport]);
 
   const retrySpeech = useCallback(() => {
-    void playbackRef.current.retry();
-  }, []);
+    legacySession.retrySpeech();
+  }, [legacySession.retrySpeech]);
 
   const setSpeakReplies = useCallback((value: boolean) => {
     if (!value) cancelSpeech();
-    if (value) void playbackRef.current.unlock();
+    if (value) legacySession.unlockSpeech();
     if (value !== speakReplies) closeClient();
     setSpeakRepliesState(value);
-  }, [cancelSpeech, closeClient, speakReplies]);
+  }, [cancelSpeech, closeClient, legacySession.unlockSpeech, speakReplies]);
+
+  const realtimeApproval = useMemo<PendingApproval | null>(() => {
+    const pending = Object.values(realtimeSession.projection.approvals).find((item) => (
+      ['pending', 'resolving'].includes(String(item.state))
+    ));
+    if (!pending || typeof pending.approval_id !== 'string') return null;
+    return {
+      runId: pending.approval_id,
+      message: typeof pending.message === 'string' ? pending.message : 'Hermes needs approval to continue.',
+      choices: approvalChoices(pending),
+      payload: pending,
+      submitting: pending.state === 'resolving',
+    };
+  }, [realtimeSession.projection.approvals]);
 
   const resolveApproval = useCallback((decision: ApprovalDecision) => {
+    if (transport === 'realtime') {
+      if (!realtimeApproval) return;
+      try { realtimeSession.resolveApproval(realtimeApproval.runId, decision); }
+      catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+      return;
+    }
     if (!approval) return;
     setApproval({ ...approval, submitting: true });
-    clientRef.current?.resolveApproval(approval.runId, decision);
-  }, [approval]);
+    legacySession.client()?.resolveApproval(approval.runId, decision);
+  }, [approval, legacySession, realtimeApproval, realtimeSession, transport]);
 
   const stopRun = useCallback(() => {
-    if (state.activeRunId) clientRef.current?.stopRun(state.activeRunId);
-  }, [state.activeRunId]);
+    if (state.activeRunId) legacySession.client()?.stopRun(state.activeRunId);
+  }, [legacySession, state.activeRunId]);
 
   const acknowledgeAcceptanceUnknown = useCallback(() => {
     if (!acceptanceUnknown) return;
     if (acceptanceUnknown.kind === 'acceptance_unknown') {
-      clientRef.current?.acknowledgeAcceptanceUnknown(acceptanceUnknown.id);
+      legacySession.client()?.acknowledgeAcceptanceUnknown(acceptanceUnknown.id);
     } else {
-      clientRef.current?.acknowledgeUnrecoverable(acceptanceUnknown.id);
+      legacySession.client()?.acknowledgeUnrecoverable(acceptanceUnknown.id);
     }
-  }, [acceptanceUnknown]);
+  }, [acceptanceUnknown, legacySession]);
 
   const selectTarget = useCallback((name: string) => {
     clearRecovery();
@@ -542,7 +519,9 @@ export function useConsoleController({
     setSessionKey('');
     setSessions([]);
     closeClient();
-  }, [closeClient]);
+    const target = bootstrap?.targets.find((item) => item.name === name);
+    setTransportState(target?.realtime_enabled ? 'realtime' : 'legacy');
+  }, [bootstrap?.targets, closeClient]);
 
   const selectSession = useCallback((value: string) => {
     clearRecovery();
@@ -559,10 +538,68 @@ export function useConsoleController({
     closeClient();
   }, [closeClient, getToken, selectedTarget]);
 
+  const setTransport = useCallback((next: VoiceTransport) => {
+    if (next === 'realtime' && !selectedTargetConfig?.realtime_enabled) return;
+    closeClient();
+    setTransportState(next);
+  }, [closeClient, selectedTargetConfig?.realtime_enabled]);
+
+  const connected = transport === 'realtime' ? realtimeSession.connected : legacySession.connected;
+  const inputLevel = transport === 'realtime' ? 0 : legacySession.inputLevel;
+  const recordingElapsed = transport === 'realtime' ? 0 : legacySession.recordingElapsed;
+  const speechFallbackAvailable = transport === 'legacy' && legacySession.speechFallbackAvailable;
+  const projectedMessages = transport === 'realtime'
+    ? mergeConversationMessages(messages, realtimeSession.projection.messages)
+    : messages;
+  const artifactAllowedOrigins = [window.location.origin];
+  const runWorkerCommand = (jobId: string, operation: 'refine' | 'redirect' | 'cancel', payload: Record<string, unknown> = {}) => {
+    const job = realtimeSession.projection.workerJobs[jobId];
+    const revision = job?.revision;
+    if (typeof revision !== 'number') {
+      dispatch({ type: 'error', message: 'Worker state is missing its current revision. Reconnect before controlling it.' });
+      return;
+    }
+    try { realtimeSession.workerCommand(jobId, operation, revision, payload); }
+    catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+  };
+  const realtime = useMemo<RealtimePresentationModel>(() => ({
+    mode: transport,
+    readiness: transport === 'legacy' ? 'disconnected' : realtimeReadiness(realtimeSession),
+    readinessDetail: transport === 'realtime' ? realtimeSession.stateDetail : undefined,
+    canReconnect: transport === 'realtime' && ['disconnected', 'failed', 'degraded'].includes(realtimeSession.state),
+    muted: realtimeSession.muted,
+    manualTurnTaking: realtimeSession.manualTurnTaking,
+    listening: transport === 'realtime' && realtimeSession.projection.listening,
+    speaking: transport === 'realtime' && realtimeSession.projection.speaking,
+    jobs: presentRealtimeJobs(realtimeSession, artifactAllowedOrigins),
+    artifactAllowedOrigins,
+    onToggleMute: transport === 'realtime' ? () => realtimeSession.setMuted(!realtimeSession.muted) : undefined,
+    // Manual audio commit remains disabled until the server-authoritative commit command is available.
+    onToggleManualTurnTaking: undefined,
+    onSendManualTurn: undefined,
+    onInterrupt: transport === 'realtime' ? cancelSpeech : undefined,
+    onEndCall: transport === 'realtime' ? realtimeSession.close : undefined,
+    onReconnect: transport === 'realtime' ? () => { void realtimeSession.connect().catch(dispatchError); } : undefined,
+    onUseLegacy: transport === 'realtime' ? () => setTransport('legacy') : undefined,
+    onRequestStatus: transport === 'realtime' ? (jobId) => {
+      try { realtimeSession.sendInput(`Give me a concise status update for delegated task ${jobId}.`); }
+      catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+    } : undefined,
+    onRefine: transport === 'realtime' ? (jobId) => {
+      const instruction = window.prompt('How should Hermes refine this task?')?.trim();
+      if (instruction) runWorkerCommand(jobId, 'refine', { instruction });
+    } : undefined,
+    onRedirect: transport === 'realtime' ? (jobId) => {
+      const instruction = window.prompt('What direction should Hermes take instead?')?.trim();
+      if (instruction) runWorkerCommand(jobId, 'redirect', { instruction });
+    } : undefined,
+    onCancel: transport === 'realtime' ? (jobId) => runWorkerCommand(jobId, 'cancel') : undefined,
+  }), [cancelSpeech, dispatchError, realtimeSession, setTransport, transport]);
+
   return useMemo(() => ({
     acceptanceUnknown,
     acknowledgeAcceptanceUnknown,
-    approval,
+    approval: transport === 'realtime' ? realtimeApproval : approval,
     bootstrap,
     cancelSpeech,
     closeClient,
@@ -572,7 +609,7 @@ export function useConsoleController({
     inputLevel,
     isCaptureSupported: browserSupportsCapture(),
     loadError,
-    messages,
+    messages: projectedMessages,
     newConversation,
     response,
     recordingElapsed,
@@ -596,10 +633,14 @@ export function useConsoleController({
     textDraft,
     transcript,
     viewState: deriveConsoleViewState(state, connected),
+    transport,
+    setTransport,
+    realtime,
   }), [
     acceptanceUnknown,
     acknowledgeAcceptanceUnknown,
     approval,
+    realtimeApproval,
     bootstrap,
     cancelSpeech,
     closeClient,
@@ -608,7 +649,7 @@ export function useConsoleController({
     discardRecording,
     inputLevel,
     loadError,
-    messages,
+    projectedMessages,
     newConversation,
     response,
     recordingElapsed,
@@ -630,5 +671,8 @@ export function useConsoleController({
     timeline,
     textDraft,
     transcript,
+    transport,
+    setTransport,
+    realtime,
   ]);
 }

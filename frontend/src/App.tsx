@@ -80,9 +80,9 @@ function ConsoleRuntime({
   ) : null;
 
   return layout === 'desktop' ? (
-    <DesktopConsole controller={controller} accountControl={accountControl} notice={warning} />
+    <DesktopConsole controller={controller} realtime={controller.realtime} accountControl={accountControl} notice={warning} />
   ) : (
-    <MobileConsole controller={controller} accountControl={accountControl} notice={warning} />
+    <MobileConsole controller={controller} realtime={controller.realtime} accountControl={accountControl} notice={warning} />
   );
 }
 
