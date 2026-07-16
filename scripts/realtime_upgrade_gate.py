@@ -84,6 +84,11 @@ def commit_exists(repo: Path, commit: str) -> bool:
     return git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode == 0
 
 
+def working_tree_clean(repo: Path) -> bool:
+    result = git(repo, "status", "--porcelain", "--untracked-files=all", check=False)
+    return result.returncode == 0 and not result.stdout.strip()
+
+
 def source_at(repo: Path, commit: str, path: str) -> str | None:
     result = git(repo, "show", f"{commit}:{path}", check=False)
     return result.stdout if result.returncode == 0 else None
@@ -212,14 +217,15 @@ def evaluate(manifest_path: Path, hermes_repo: Path) -> dict[str, Any]:
     current_main = main_result.stdout.strip() if main_result.returncode == 0 else ""
     head_result = git(hermes_repo, "rev-parse", "HEAD", check=False)
     head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+    checkout_clean = working_tree_clean(hermes_repo)
 
     static_ok, static_failures = (
         static_contract_check(hermes_repo, pinned)
         if pinned and commit_exists(hermes_repo, pinned)
         else (False, ["production pin is missing"])
     )
-    contract, probe_detail = runtime_contract(hermes_repo) if head == pinned and static_ok else (
-        None, "runtime probe not run because checkout or static contract did not pass"
+    contract, probe_detail = runtime_contract(hermes_repo) if head == pinned and checkout_clean and static_ok else (
+        None, "runtime probe not run because checkout, clean-tree, or static contract gate did not pass"
     )
     configured_models = manifest.get("models") or {}
     runtime_compatibility = None
@@ -244,7 +250,7 @@ def evaluate(manifest_path: Path, hermes_repo: Path) -> dict[str, Any]:
         else (False, "focused Realtime suite not run because contract preflight failed")
     )
     pinned_ok = bool(
-        head == pinned and static_ok and runtime_compatibility is not None
+        head == pinned and checkout_clean and static_ok and runtime_compatibility is not None
         and runtime_compatibility.compatible and tests_ok
     )
 
@@ -264,6 +270,7 @@ def evaluate(manifest_path: Path, hermes_repo: Path) -> dict[str, Any]:
             "passed": pinned_ok,
             "static_failures": static_failures,
             "probe": probe_detail,
+            "checkout": "clean" if checkout_clean else "dirty",
             "tests": tests_detail,
             "reasons": list(runtime_compatibility.reasons) if runtime_compatibility else [],
         },
@@ -309,6 +316,7 @@ def evaluate(manifest_path: Path, hermes_repo: Path) -> dict[str, Any]:
         "passed": all(bool(row["passed"]) for row in rows),
         "active_checkout": head,
         "pinned_checkout": head == pinned,
+        "checkout_clean": checkout_clean,
         "rows": rows,
     }
 

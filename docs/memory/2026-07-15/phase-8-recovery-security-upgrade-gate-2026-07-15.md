@@ -33,7 +33,7 @@ Run the compatibility check with:
 HERMES_REALTIME_REPO=/absolute/path/to/hermes-agent-realtime make realtime-upgrade-gate
 ```
 
-The script is deliberately read-only. It parses the exact pinned contract, API methods, and HTTP surface; obtains capabilities from the checked-out runtime; runs the Voice Console compatibility parser including a model-unavailable negative probe; and executes the 92-test Hermes Realtime suite. A different minimum commit or newly capable `main` fails until it is validated in its own disposable checkout. The command never switches a running Hermes checkout or touches an active agent.
+The script is deliberately read-only. It requires the Hermes checkout to be exactly pinned with no tracked or untracked changes, parses that commit's contract, API methods, and HTTP surface, obtains capabilities from the checked-out runtime, runs the Voice Console compatibility parser including a model-unavailable negative probe, and executes the 92-test Hermes Realtime suite. A dirty checkout, different minimum commit, or newly capable `main` fails until it is validated in its own disposable checkout. The command never switches a running Hermes checkout or touches an active agent.
 
 ## Automated recovery matrix
 
@@ -61,7 +61,7 @@ The script is deliberately read-only. It parses the exact pinned contract, API m
 
 ## Security evidence
 
-`scripts/realtime_security_gate.py` is a defense-in-depth heuristic over production browser assets and non-test browser source after the frontend build. It fails on provider credential markers, OpenAI-style secrets, source maps, dynamic/aliased/unapproved Web Storage writes, direct IndexedDB/cookie/Cache API writes in application source, or content fields in recovery persistence. The only approved application storage write is `hvc.recovery.v1`; save constructs its seven fields explicitly and load rejects non-exact key sets. Hostile tests inject transcript, response, tool arguments, API-key, token, and Authorization extras into both save and stored JSON.
+`scripts/realtime_security_gate.py` is a defense-in-depth heuristic over production browser assets and non-test browser source after the frontend build. It fails on provider credential markers, OpenAI-style secrets, source maps, dynamic/aliased/unapproved Web Storage writes, direct IndexedDB/cookie/Cache API writes in application source, or content fields in recovery persistence. The only approved application storage write is `hvc.recovery.v1`; save constructs its seven fields explicitly and load rejects non-exact key sets. Hostile tests inject transcript, response, tool arguments, API-key, token, and Authorization extras across save and stored-JSON paths.
 
 Additional authoritative-boundary proof:
 
@@ -80,7 +80,7 @@ Additional authoritative-boundary proof:
 - Hermes representative API Server/platform/profile/Telegram/Discord/voice regression: 356 passed, 21 skipped because those cases are explicitly environment-gated.
 - Browser artifact security gate: passed.
 - Upgrade gate: passed with pinned checkout exact and current main blocked.
-- Full `make check`: passed (backend, lint, 17 frontend files / 93 tests, production build, browser security audit, and fake E2E).
+- Full `make check`: passed (backend, lint, 17 frontend files / 94 tests, production build, browser security audit, and fake E2E).
 - Full `make browser-check`: 8 Playwright scenarios passed against the polished desktop/compact/mobile UI. Screenshot evidence is stored under `docs/visual-qa/` by the visual acceptance slice.
 
 One transient manual-discard transport failure was triaged as a possible race instead of being ignored. The exact backend discard/restart case passed 20 consecutive runs, and all four frontend discard/reconnect cases passed 20 consecutive runs (80 assertions across those repeated files). No deterministic failure reproduced, so no timing workaround was added; the staging telemetry gate must still watch for a real 502 recurrence.

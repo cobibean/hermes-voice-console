@@ -158,3 +158,33 @@ def test_phase8_upgrade_gate_rejects_empty_pinned_contract(tmp_path: Path) -> No
         "observed": "not_validated",
         "passed": False,
     }
+
+    untracked_override = repo / "gateway" / "realtime" / "untracked_override.py"
+    untracked_override.write_text("uncommitted test override")
+    untracked = subprocess.run(
+        [sys.executable, str(script), "--manifest", str(manifest), "--hermes-repo", str(repo), "--json"],
+        check=False, capture_output=True, text=True,
+    )
+    assert untracked.returncode == 1
+    untracked_document = json.loads(untracked.stdout)
+    assert untracked_document["checkout_clean"] is False
+    untracked_pin = next(
+        row for row in untracked_document["rows"] if row["lane"] == "production_pinned"
+    )
+    assert untracked_pin["checkout"] == "dirty"
+    assert untracked_pin["passed"] is False
+    untracked_override.unlink()
+
+    (repo / "gateway" / "realtime" / "api.py").write_text("uncommitted runtime override")
+    dirty = subprocess.run(
+        [sys.executable, str(script), "--manifest", str(manifest), "--hermes-repo", str(repo), "--json"],
+        check=False, capture_output=True, text=True,
+    )
+    assert dirty.returncode == 1
+    dirty_document = json.loads(dirty.stdout)
+    assert dirty_document["checkout_clean"] is False
+    dirty_pin = next(
+        row for row in dirty_document["rows"] if row["lane"] == "production_pinned"
+    )
+    assert dirty_pin["checkout"] == "dirty"
+    assert dirty_pin["passed"] is False
