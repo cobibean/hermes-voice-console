@@ -616,7 +616,7 @@ export function useConsoleController({
     speaking: transport === 'realtime' && realtimeSession.projection.speaking,
     jobs: presentRealtimeJobs(realtimeSession, artifactAllowedOrigins),
     artifactAllowedOrigins,
-    onToggleMute: transport === 'realtime' && !manualCaptureActive
+    onToggleMute: transport === 'realtime' && realtimeSession.state === 'ready' && !manualCaptureActive
       ? () => realtimeSession.setMuted(!realtimeSession.muted)
       : undefined,
     onToggleManualTurnTaking: transport === 'realtime' && realtimeSession.manualControlsAvailable && !manualCaptureActive

@@ -335,6 +335,7 @@ export function useRealtimeSession({
   }, [teardown]);
 
   const setMuted = useCallback((value: boolean) => {
+    if (!value && manualRecoveryRequiredRef.current) return;
     mutedRef.current = value;
     setMutedState(value);
     mediaRef.current?.setMuted(value || turnModeRef.current === 'manual');
@@ -432,6 +433,7 @@ export function useRealtimeSession({
     return promise;
   }, [currentCompatibility, identity, requireControl]);
   const startManualTurn = useCallback(() => {
+    if (manualRecoveryRequiredRef.current) return;
     if (manualCaptureState === 'error' && !manualCaptureRetryable) return;
     let required: ReturnType<typeof requireControl>;
     try { required = requireControl(); }

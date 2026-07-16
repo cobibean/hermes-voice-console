@@ -175,6 +175,20 @@ describe('useRealtimeSession approval and identity ownership', () => {
     expect(result.current.muted).toBe(true);
     expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
     expect(mocks.turnMode).toHaveBeenCalledTimes(1);
+    const lockedMuteCalls = mocks.media[0].setMuted.mock.calls.length;
+    act(() => {
+      result.current.setMuted(false);
+      result.current.startManualTurn();
+    });
+    expect(result.current.muted).toBe(true);
+    expect(mocks.media[0].setMuted).toHaveBeenCalledTimes(lockedMuteCalls);
+
+    await act(async () => { await result.current.connect(); });
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    expect(result.current.manualControlsAvailable).toBe(true);
+    act(() => result.current.setMuted(false));
+    expect(result.current.muted).toBe(false);
+    expect(mocks.media[1].setMuted).toHaveBeenLastCalledWith(false);
   });
 
   it('keeps the effective mode unchanged and visibly fails closed on the exact durable mode rejection', async () => {
@@ -206,10 +220,21 @@ describe('useRealtimeSession approval and identity ownership', () => {
     expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
     await expect(result.current.setManualTurnTaking(true)).rejects.toThrow('Reconnect this Realtime call');
     expect(mocks.turnMode).toHaveBeenCalledTimes(1);
+    const lockedMuteCalls = mocks.media[0].setMuted.mock.calls.length;
+    act(() => {
+      result.current.setMuted(false);
+      result.current.startManualTurn();
+    });
+    expect(result.current.muted).toBe(true);
+    expect(mocks.media[0].setMuted).toHaveBeenCalledTimes(lockedMuteCalls);
 
     await act(async () => { await result.current.connect(); });
     await waitFor(() => expect(result.current.state).toBe('ready'));
     expect(mocks.createSession).toHaveBeenCalledTimes(2);
+    expect(result.current.manualControlsAvailable).toBe(true);
+    act(() => result.current.setMuted(false));
+    expect(result.current.muted).toBe(false);
+    expect(mocks.media[1].setMuted).toHaveBeenLastCalledWith(false);
   });
 
   it('mutes before one stable manual commit and restores automatic mode only after ack', async () => {

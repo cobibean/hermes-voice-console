@@ -188,6 +188,7 @@ describe('useConsoleController conversation identity', () => {
     expect(result.current.realtime.readiness).toBe('degraded');
     expect(result.current.realtime.canReconnect).toBe(true);
     expect(result.current.realtime.onReconnect).toBeDefined();
+    expect(result.current.realtime.onToggleMute).toBeUndefined();
     expect(result.current.realtime.onToggleManualTurnTaking).toBeUndefined();
     expect(result.current.realtime.onStartManualTurn).toBeUndefined();
     expect(result.current.realtime.onSendManualTurn).toBeUndefined();
