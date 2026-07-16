@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -51,11 +52,14 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
         )
 
     @router.delete("/sessions/{session_id}")
-    async def delete_session(session_id: str, target: str, request: Request):
+    async def delete_session(
+        session_id: str, target: str, client_request_id: str, request: Request
+    ):
         auth_context = context(request)
         return await _respond(
             lambda: service.delete_session(
-                session_id, target_name=target, auth_context=auth_context
+                session_id, target_name=target, auth_context=auth_context,
+                client_request_id=client_request_id,
             )
         )
 
@@ -209,10 +213,19 @@ def _worker_command(service: RealtimeProxyService, auth: AuthGate, operation: st
 
 
 async def _read_json(request: Request, *, maximum: int = MAX_CONTROL_BODY_BYTES) -> dict[str, Any]:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json" and not content_type.endswith("+json"):
+        raise RealtimeProxyError(
+            "unsupported_media_type", "Content-Type must be application/json", status=415
+        )
     length = request.headers.get("content-length")
     if length and length.isdigit() and int(length) > maximum:
         raise RealtimeProxyError("request_too_large", "Request body exceeded the limit", status=413)
-    raw = await request.body()
+    try:
+        async with asyncio.timeout(5):
+            raw = await request.body()
+    except TimeoutError as exc:
+        raise RealtimeProxyError("request_timeout", "Request body timed out", status=408) from exc
     if len(raw) > maximum:
         raise RealtimeProxyError("request_too_large", "Request body exceeded the limit", status=413)
     try:

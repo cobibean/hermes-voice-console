@@ -29,6 +29,11 @@ def create_fake_hermes_app() -> FastAPI:
     app.state.realtime_requests = {}
     app.state.realtime_events = {}
     app.state.worker_jobs = {}
+    app.state.realtime_overrides = {}
+    app.state.realtime_create_payloads = []
+
+    def overridden(name: str, document: dict[str, Any]) -> dict[str, Any]:
+        return {**document, **(app.state.realtime_overrides.get(name) or {})}
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -118,17 +123,19 @@ def create_fake_hermes_app() -> FastAPI:
                         "transport": "webrtc",
                         "bootstrap": "unified_sdp",
                         "sideband_authority": "server",
-                        "create_readiness": "controller_ready",
+                        "create_readiness": "controller_ready_before_sdp",
                     },
                     "provider": {"id": "openai", "model": "gpt-realtime-2.1", "models": ["gpt-realtime-2.1"], "voice": "marin", "reasoning_effort": None},
                     "models": ["gpt-realtime-2.1"],
                     "sideband_authority": "server",
                     "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"]},
                     "events": {"replay": True, "durable": True, "cursor": "event_id", "gap_error": "event_replay_gap"},
-                    "tools": {"execution": "hermes", "direct_allowlist": True, "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
+                    "tools": {"execution": "server", "direct_allowlist": ["get_status"], "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
                     "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
                     "approvals": {"server_authoritative": True, "choices": ["once", "deny"]},
-                    "routing_policy": {"persona_model": "gpt-realtime-2.1", "substantial_work": "delegate", "default_fanout": 1, "confirmation": "announce_without_confirmation"},
+                    "routing_policy": {"persona_model": "gpt-realtime-2.1", "substantial_work": "delegate", "default_fanout": 1, "confirmation": "announce_without_prompting"},
+                    "retention": {"event_count": 2048, "event_bytes": 4194304, "context_bytes": 65536, "completed_item_days": 30},
+                    "timeouts": {"provider_request_seconds": 30, "controller_ready_seconds": 10, "tool_seconds": 120, "worker_seconds": 3600, "approval_seconds": 300},
                     "behaviors": {
                         "server_controlled_webrtc": True,
                         "hermes_tool_dispatch": True,
@@ -348,6 +355,7 @@ def create_fake_hermes_app() -> FastAPI:
     async def realtime_create(request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
         body = await request.json()
+        app.state.realtime_create_payloads.append(body)
         conversation_id = str(body.get("conversation_id") or "")
         request_id = str(body.get("client_request_id") or "")
         offer = str(body.get("sdp_offer") or "")
@@ -386,12 +394,12 @@ def create_fake_hermes_app() -> FastAPI:
         )
         if request_id.startswith("ambiguous"):
             await asyncio.sleep(0.2)
-        return result
+        return overridden("create", result)
 
     @app.get("/v1/realtime/sessions/{session_id}")
     async def realtime_get(session_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
-        return realtime_session(session_id)
+        return overridden("session", realtime_session(session_id))
 
     @app.delete("/v1/realtime/sessions/{session_id}")
     async def realtime_delete(session_id: str, request: Request) -> dict[str, Any]:
@@ -432,7 +440,7 @@ def create_fake_hermes_app() -> FastAPI:
             return JSONResponse(status_code=409, content={"error": {"code": "event_replay_gap", "message": "Requested events are no longer retained", "details": {"oldest_event_id": events[0]["event_id"]}}})
         start = next((index + 1 for index, event in enumerate(events) if event["event_id"] == after), 0)
         selected = events[start:]
-        return {"conversation_id": document["conversation_id"], "events": selected, "last_event_id": selected[-1]["event_id"] if selected else after}
+        return overridden("events", {"conversation_id": document["conversation_id"], "events": selected, "last_event_id": selected[-1]["event_id"] if selected else after})
 
     @app.post("/v1/realtime/sessions/{session_id}/approvals/{approval_id}")
     async def realtime_approval(session_id: str, approval_id: str, request: Request) -> dict[str, Any]:
@@ -445,14 +453,14 @@ def create_fake_hermes_app() -> FastAPI:
     async def realtime_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
         session_id = app.state.realtime_by_conversation.get(conversation_id)
-        return {
+        return overridden("conversation", {
             "contract_version": "1.0",
             "conversation_id": conversation_id,
             "session": app.state.realtime_sessions.get(session_id),
             "pending_approvals": [{"approval_id": "approval_1", "state": "pending"}],
             "worker_jobs": list(app.state.worker_jobs.get(conversation_id, {}).values()),
             "last_event_id": "ev_3",
-        }
+        })
 
     worker_path = "/v1/realtime/conversations/{conversation_id}/worker-jobs"
 
@@ -467,7 +475,7 @@ def create_fake_hermes_app() -> FastAPI:
         job = app.state.worker_jobs.get(conversation_id, {}).get(worker_job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Worker job not found")
-        return job
+        return overridden("worker_job", job)
 
     @app.get(worker_path + "/{worker_job_id}/events")
     async def realtime_worker_events(conversation_id: str, worker_job_id: str, request: Request, after: int = 0) -> dict[str, Any]:

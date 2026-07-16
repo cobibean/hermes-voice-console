@@ -28,6 +28,8 @@ from .providers import (
     make_tts_provider,
 )
 from .realtime import RealtimeProxyService, create_realtime_router
+from .realtime.socket import handle_realtime_socket
+from .realtime.store import RealtimeMappingStore
 from .run_coordinator import RunCoordinator
 from .run_store import ConsoleStore
 from .session_manager import SessionManager
@@ -46,6 +48,7 @@ class ConsoleState:
     sessions: SessionManager
     runs: RunCoordinator
     realtime: RealtimeProxyService
+    realtime_store: RealtimeMappingStore
 
 
 def create_app(
@@ -81,9 +84,11 @@ def create_app(
         max_events=config.server.max_run_events,
         terminal_retention_seconds=config.server.terminal_retention_seconds,
     )
+    realtime_store = RealtimeMappingStore(config.server.state_dir)
     realtime = RealtimeProxyService(
         targets=targets,
         sessions=sessions,
+        store=realtime_store,
         request_timeout_seconds=config.server.request_timeout_seconds,
     )
     state = ConsoleState(
@@ -97,6 +102,7 @@ def create_app(
         sessions=sessions,
         runs=runs,
         realtime=realtime,
+        realtime_store=realtime_store,
     )
 
     @asynccontextmanager
@@ -106,6 +112,7 @@ def create_app(
             yield
         finally:
             await state.runs.close()
+            state.realtime_store.close()
             state.store.close()
 
     app = FastAPI(title="Hermes Voice Console", version="0.1.0", lifespan=lifespan)
@@ -244,6 +251,19 @@ def create_app(
             await ws.close(code=4403, reason="Origin is not allowed")
             return
         await handle_voice_socket(ws, state)
+
+    @app.websocket("/ws/realtime")
+    async def realtime_ws(ws: WebSocket) -> None:
+        if not state.auth.validate_websocket_scheme(ws.url.scheme):
+            await ws.close(code=4403, reason="Secure WebSocket transport is required")
+            return
+        if not state.auth.validate_host(ws.headers.get("host")):
+            await ws.close(code=4403, reason="Host is not allowed")
+            return
+        if not state.auth.validate_origin(ws.headers.get("origin"), required=False):
+            await ws.close(code=4403, reason="Origin is not allowed")
+            return
+        await handle_realtime_socket(ws, state)
 
     if static_dir == "auto":
         source_static = Path("frontend/dist")

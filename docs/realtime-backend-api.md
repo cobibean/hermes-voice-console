@@ -18,7 +18,7 @@ session creation, where it is a JSON field.
 | `GET` | `/api/realtime/targets/{target}/compatibility` | None |
 | `POST` | `/api/realtime/sessions` | `{target, conversation_id, client_request_id, sdp_offer, turn_mode?}` |
 | `GET` | `/api/realtime/sessions/{session_id}` | `target` |
-| `DELETE` | `/api/realtime/sessions/{session_id}` | `target` |
+| `DELETE` | `/api/realtime/sessions/{session_id}` | `target`, `client_request_id` |
 | `POST` | `/api/realtime/sessions/{session_id}/activate` | `target`; `{session_generation, client_request_id}` |
 | `POST` | `/api/realtime/sessions/{session_id}/input` | `target`; `{session_generation, client_request_id, text}` |
 | `POST` | `/api/realtime/sessions/{session_id}/interrupt` | `target`; `{session_generation, client_request_id}` |
@@ -40,3 +40,9 @@ snapshot and resume from its authoritative cursor.
 
 Errors use `{error: {code, message}}`. Provider and target exception text is never reflected.
 Request bodies, SDP, response documents, cursor lengths, and target request durations are bounded.
+
+`/ws/realtime` is the dedicated authenticated control channel. Its first post-authentication frame
+must be `{type: "subscribe", target, conversation_id, realtime_session_id, after?}`. It sends an
+authoritative snapshot before replay events and accepts bounded `input`, `interrupt`, `approval`,
+and `worker.command` frames. Heartbeats, send deadlines, replay-gap snapshots, and a slow-consumer
+close policy keep this channel independent from the legacy `/ws/voice` state machine.

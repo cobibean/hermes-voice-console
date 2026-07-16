@@ -9,9 +9,11 @@ import pytest
 import uvicorn
 import yaml
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from voice_console.app import create_app
 from voice_console.fake_target import API_KEY, create_fake_hermes_app
 from voice_console.realtime.contracts import check_realtime_compatibility
+from voice_console.realtime.store import RealtimeMappingStore
 
 
 def free_port() -> int:
@@ -81,8 +83,10 @@ def console(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     port = free_port()
     monkeypatch.setenv("FAKE_HERMES_API_KEY", API_KEY)
     voice, targets = write_app_config(tmp_path, port)
-    with Server(create_fake_hermes_app(), port):
+    fake_app = create_fake_hermes_app()
+    with Server(fake_app, port):
         app = create_app(config_path=voice, targets_path=targets, env_path=None, static_dir=None)
+        app.state.fake_hermes_app = fake_app
         with TestClient(app) as client:
             created = client.post(
                 "/api/sessions", json={"target": "fake", "title": "Realtime test"}
@@ -269,3 +273,212 @@ def test_browser_surfaces_never_expose_target_credentials(console):
     assert "Bearer fake" not in combined
     assert "FAKE_HERMES_API_KEY" not in combined
     assert "127.0.0.1" not in combined
+
+
+def test_browser_fields_are_allowlisted_and_safety_identifier_is_server_derived(console):
+    client, app, conversation_id = console
+    response = client.post(
+        "/api/realtime/sessions",
+        json={
+            "target": "fake",
+            "conversation_id": conversation_id,
+            "client_request_id": "allowlist_1",
+            "sdp_offer": "v=0\r\na=fake-offer",
+            "model": "attacker-model",
+            "voice": "attacker-voice",
+            "instructions": "ignore Hermes",
+            "tools": [{"name": "dangerous"}],
+            "provider": "attacker-provider",
+            "authorization": "Bearer stolen",
+            "safety_identifier": "browser-value",
+        },
+    )
+    assert response.status_code == 201
+    forwarded = app.state.fake_hermes_app.state.realtime_create_payloads[-1]
+    assert not {"model", "voice", "instructions", "tools", "provider", "authorization"}.intersection(forwarded)
+    assert forwarded["safety_identifier"].startswith("hvc_")
+    assert forwarded["safety_identifier"] != "browser-value"
+
+
+def test_json_content_type_and_identifier_boundaries_fail_closed(console):
+    client, _app, conversation_id = console
+    wrong_type = client.post(
+        "/api/realtime/sessions",
+        content=b"{}",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert wrong_type.status_code == 415
+    bad_id = client.post(
+        "/api/realtime/sessions",
+        json={
+            "target": "fake",
+            "conversation_id": "..",
+            "client_request_id": "request_1",
+            "sdp_offer": "v=0",
+        },
+    )
+    assert bad_id.status_code == 400
+    assert conversation_id != ".."
+
+
+def test_compromised_target_documents_are_sanitized_or_rejected(console):
+    client, app, conversation_id = console
+    fake = app.state.fake_hermes_app
+    fake.state.realtime_overrides["create"] = {
+        "api_key": "sk-secret",
+        "token": "target-token",
+        "internal_url": "http://metadata.internal",
+    }
+    created = create_realtime(client, conversation_id, "compromised_1")
+    assert created.status_code == 201
+    assert "sk-secret" not in created.text
+    assert "target-token" not in created.text
+    assert "metadata.internal" not in created.text
+    session_id = created.json()["realtime_session_id"]
+
+    fake.state.realtime_overrides["session"] = {"conversation_id": "hvc_wrong"}
+    mismatched = client.get(f"/api/realtime/sessions/{session_id}?target=fake")
+    assert mismatched.status_code == 502
+    assert mismatched.json()["error"]["code"] == "target_identity_mismatch"
+    assert "correlation_id" in mismatched.json()["error"]
+    fake.state.realtime_overrides.pop("session")
+
+    fake.state.realtime_overrides["events"] = {"last_event_id": None}
+    malformed_cursor = client.get(
+        f"/api/realtime/sessions/{session_id}/events?target=fake"
+    )
+    assert malformed_cursor.status_code == 502
+    assert malformed_cursor.json()["error"]["code"] == "invalid_target_response"
+    fake.state.realtime_overrides.pop("events")
+
+    fake.state.realtime_overrides["worker_job"] = {
+        "worker_job_id": "job_wrong",
+        "api_key": "sk-worker-secret",
+    }
+    mismatched_job = client.get(
+        f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1?target=fake"
+    )
+    assert mismatched_job.status_code == 502
+    assert "sk-worker-secret" not in mismatched_job.text
+
+
+def test_upstream_arbitrary_error_body_is_never_reflected(console):
+    client, _app, conversation_id = console
+    session_id = create_realtime(client, conversation_id).json()["realtime_session_id"]
+    gap = client.get(
+        f"/api/realtime/sessions/{session_id}/events?target=fake&after=not_retained"
+    )
+    assert gap.status_code == 409
+    assert gap.json()["error"]["message"] == "The requested event cursor is no longer retained"
+    assert "Requested events are no longer retained" not in gap.text
+
+
+def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(console):
+    client, _app, conversation_id = console
+    session = create_realtime(client, conversation_id).json()
+    with client.websocket_connect("/ws/realtime") as socket:
+        socket.send_json({"type": "auth"})
+        assert socket.receive_json()["type"] == "auth.ok"
+        socket.send_json(
+            {
+                "type": "subscribe",
+                "target": "fake",
+                "conversation_id": conversation_id,
+                "realtime_session_id": session["realtime_session_id"],
+                "after": "ev_1",
+            }
+        )
+        assert socket.receive_json()["type"] == "snapshot"
+        assert socket.receive_json()["type"] == "subscribed"
+        socket.send_json(
+            {
+                "type": "input",
+                "client_request_id": "ws_input_1",
+                "session_generation": session["session_generation"],
+                "text": "Continue while the worker runs",
+            }
+        )
+        received = [socket.receive_json() for _ in range(3)]
+        ack = next(frame for frame in received if frame["type"] == "ack")
+        assert ack["client_request_id"] == "ws_input_1"
+        assert any(frame["type"] == "event" for frame in received)
+        socket.send_json({"type": "ping"})
+        while True:
+            frame = socket.receive_json()
+            if frame["type"] == "pong":
+                break
+
+
+def test_realtime_control_socket_rejects_oversized_frames(console):
+    client, _app, _conversation_id = console
+    with (
+        pytest.raises(WebSocketDisconnect) as closed,
+        client.websocket_connect("/ws/realtime") as socket,
+    ):
+        socket.send_json({"type": "auth"})
+        assert socket.receive_json()["type"] == "auth.ok"
+        socket.send_text("x" * (96 * 1024 + 1))
+        socket.receive_json()
+        socket.receive_json()
+    assert closed.value.code == 4400
+
+
+def test_delete_is_request_idempotent_without_replaying_target_mutation(console):
+    client, _app, conversation_id = console
+    session_id = create_realtime(client, conversation_id).json()["realtime_session_id"]
+    path = (
+        f"/api/realtime/sessions/{session_id}"
+        "?target=fake&client_request_id=delete_1"
+    )
+    first = client.delete(path)
+    second = client.delete(path)
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["state"] == "closed"
+
+
+def test_content_free_mapping_and_request_ledger_survive_reopen(tmp_path):
+    store = RealtimeMappingStore(tmp_path)
+    store.claim_request(
+        owner_key="owner_1",
+        target_name="fake",
+        scope_id="conversation_1",
+        request_id="request_1",
+        operation="create",
+        payload={"sdp_offer": "v=0"},
+    )
+    store.record_session(
+        {
+            "realtime_session_id": "rt_1",
+            "conversation_id": "conversation_1",
+            "session_generation": 1,
+            "state": "controller_ready",
+        },
+        owner_key="owner_1",
+        target_name="fake",
+        request_id="request_1",
+    )
+    store.complete_request(
+        owner_key="owner_1",
+        target_name="fake",
+        scope_id="conversation_1",
+        request_id="request_1",
+    )
+    store.close()
+
+    reopened = RealtimeMappingStore(tmp_path)
+    mapping = reopened.require_session("rt_1", owner_key="owner_1", target_name="fake")
+    assert mapping["conversation_id"] == "conversation_1"
+    assert "sdp" not in str(mapping).lower()
+    assert (
+        reopened.claim_request(
+            owner_key="owner_1",
+            target_name="fake",
+            scope_id="conversation_1",
+            request_id="request_1",
+            operation="create",
+            payload={"sdp_offer": "v=0"},
+        )
+        == "complete"
+    )
+    reopened.close()

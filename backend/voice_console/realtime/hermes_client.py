@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote
@@ -14,14 +15,17 @@ MAX_JSON_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 class RealtimeProxyError(RuntimeError):
-    def __init__(self, code: str, message: str, *, status: int = 502) -> None:
+    def __init__(self, code: str, message: str, *, status: int = 502,
+                 correlation_id: str | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
+        self.correlation_id = correlation_id or f"rtcorr_{uuid.uuid4().hex[:16]}"
 
     def public_dict(self) -> dict[str, Any]:
-        return {"error": {"code": self.code, "message": self.message}}
+        return {"error": {"code": self.code, "message": self.message,
+                           "correlation_id": self.correlation_id}}
 
 
 class AmbiguousRealtimeMutation(RealtimeProxyError):
@@ -49,8 +53,12 @@ class HermesRealtimeClient:
         document = await self._request("GET", "/v1/capabilities", timeout=15.0)
         return check_realtime_compatibility(document)
 
-    async def create_session(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/v1/realtime/sessions", json_body=body, mutation="create")
+    async def create_session(
+        self, body: Mapping[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST", "/v1/realtime/sessions", json_body=body, mutation="create", timeout=timeout
+        )
 
     async def get_session(self, session_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/realtime/sessions/{_segment(session_id)}")
@@ -186,11 +194,28 @@ def _json_object(raw: bytes) -> dict[str, Any]:
 
 def _public_upstream_error(document: Mapping[str, Any], status: int) -> tuple[str, str]:
     error = document.get("error")
-    if isinstance(error, Mapping):
-        code = str(error.get("code") or "hermes_request_failed")[:80]
-        message = str(error.get("message") or "Hermes rejected the request")[:400]
-        return code, message
-    return "hermes_request_failed", f"Hermes rejected the request (HTTP {status})"
+    raw_code = str(error.get("code") or "") if isinstance(error, Mapping) else ""
+    safe = {
+        "event_replay_gap": ("event_replay_gap", "The requested event cursor is no longer retained"),
+        "idempotency_conflict": ("idempotency_conflict", "The request ID was already used for different input"),
+        "worker_job_conflict": ("worker_job_conflict", "The worker job revision changed"),
+        "worker_job_not_found": ("resource_not_found", "The requested resource was not found"),
+        "session_not_found": ("resource_not_found", "The requested resource was not found"),
+        "stale_generation": ("stale_generation", "The Realtime session generation is stale"),
+        "invalid_generation": ("invalid_request", "The Realtime session generation is invalid"),
+        "invalid_revision": ("invalid_request", "The worker job revision is invalid"),
+    }
+    if raw_code in safe:
+        return safe[raw_code]
+    if status in {401, 403}:
+        return "target_authorization_failed", "Hermes target authorization failed"
+    if status == 404:
+        return "resource_not_found", "The requested resource was not found"
+    if status == 409:
+        return "target_conflict", "Hermes rejected the request because state changed"
+    if status == 429:
+        return "target_rate_limited", "Hermes temporarily rate limited the request"
+    return "hermes_request_failed", "Hermes could not complete the request"
 
 
 def _safe_status(status: int) -> int:
