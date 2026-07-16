@@ -90,6 +90,22 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
             )
         )
 
+    @router.post("/sessions/{session_id}/discard")
+    async def manual_audio_discard(session_id: str, target: str, request: Request):
+        auth_context = context(request)
+        return await _respond(
+            lambda: _with_body(
+                request,
+                lambda body: service.manual_control(
+                    session_id,
+                    "manual_audio_discard",
+                    body,
+                    target_name=target,
+                    auth_context=auth_context,
+                ),
+            )
+        )
+
     @router.post("/sessions/{session_id}/turn-mode")
     async def turn_mode_update(session_id: str, target: str, request: Request):
         auth_context = context(request)

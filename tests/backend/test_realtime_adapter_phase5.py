@@ -138,8 +138,8 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
             / "hermes_realtime_phase4_mutation_shapes.json"
         ).read_text()
     )
-    assert fixture["source_commit"] == "810ac2b946aeaddffa2a5d7e91035ec8505c9ec4"
-    assert fixture["phase4_2_status"] == "locked"
+    assert fixture["source_commit"] == "d41e793a355ae1bb9dc2c974d1fd2edc8b6c6a61"
+    assert fixture["phase4_3_status"] == "locked"
     shapes = fixture["mutations"]
     fake = app.state.fake_hermes_app
 
@@ -182,6 +182,17 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
                 f"/api/realtime/sessions/{session_id}/commit?target=fake",
                 json={
                     "client_request_id": "shape_commit_1",
+                    "session_generation": generation,
+                },
+            ),
+        ),
+        (
+            "manual_audio_discard",
+            "shape_discard_1",
+            client.post(
+                f"/api/realtime/sessions/{session_id}/discard?target=fake",
+                json={
+                    "client_request_id": "shape_discard_1",
                     "session_generation": generation,
                 },
             ),
@@ -241,6 +252,18 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
         fake.state.realtime_requests[(conversation_id, "empty_shape_commit_1")],
         shapes["manual_audio_commit_rejected"],
     )
+    rejected_discard = client.post(
+        f"/api/realtime/sessions/{session_id}/discard?target=fake",
+        json={
+            "client_request_id": "reject_discard_shape_1",
+            "session_generation": generation,
+        },
+    )
+    assert rejected_discard.status_code == 409
+    assert_phase4_shape(
+        fake.state.realtime_requests[(conversation_id, "reject_discard_shape_1")],
+        shapes["manual_audio_discard_rejected"],
+    )
 
     unknown = client.post(
         f"/api/realtime/sessions/{session_id}/interrupt?target=fake",
@@ -287,6 +310,7 @@ def test_capability_negotiation_is_strict_and_preserves_rich_contract(console):
         "expires_at",
     ]
     assert document["contract"]["sessions"]["manual_audio_commit"] is True
+    assert document["contract"]["sessions"]["manual_audio_discard"] is True
     assert document["contract"]["sessions"]["turn_mode_update"] is True
     assert "Bearer fake" not in response.text
 
@@ -751,6 +775,25 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
         }
         socket.send_json(
             {
+                "type": "manual_audio_discard",
+                "client_request_id": "ws_discard_1",
+                "session_generation": session["session_generation"],
+            }
+        )
+        discard_ack = socket.receive_json()
+        assert discard_ack == {
+            "type": "ack",
+            "client_request_id": "ws_discard_1",
+            "result": {
+                "client_request_id": "ws_discard_1",
+                "realtime_session_id": session["realtime_session_id"],
+                "session_generation": session["session_generation"],
+                "state": "accepted",
+                "audio_discard_requested": True,
+            },
+        }
+        socket.send_json(
+            {
                 "type": "manual_audio_commit",
                 "client_request_id": "ws_commit_1",
                 "session_generation": session["session_generation"],
@@ -922,7 +965,30 @@ def test_worker_command_result_lookup_survives_proxy_restart(tmp_path, monkeypat
                 "/api/sessions", json={"target": "fake", "title": "Restart lookup"}
             )
             conversation_id = created.json()["conversation_id"]
-            create_realtime(first_client, conversation_id, "restart_create_1")
+            realtime = create_realtime(
+                first_client, conversation_id, "restart_create_1"
+            ).json()
+            session_id = realtime["realtime_session_id"]
+            generation = realtime["session_generation"]
+            first_client.post(
+                f"/api/realtime/sessions/{session_id}/turn-mode?target=fake",
+                json={
+                    "client_request_id": "restart_mode_1",
+                    "session_generation": generation,
+                    "turn_mode": "manual",
+                },
+            )
+            fake_app.state.realtime_audio_buffers[session_id].append("old-audio")
+            discard_body = {
+                "client_request_id": "restart_discard_1",
+                "session_generation": generation,
+            }
+            discarded = first_client.post(
+                f"/api/realtime/sessions/{session_id}/discard?target=fake",
+                json=discard_body,
+            )
+            assert discarded.status_code == 200
+            expected_discard = discarded.json()
             command = first_client.post(
                 f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/cancel?target=fake",
                 json={
@@ -947,6 +1013,15 @@ def test_worker_command_result_lookup_survives_proxy_restart(tmp_path, monkeypat
             )
             assert looked_up.status_code == 200
             assert looked_up.json() == expected
+            discard_duplicate = restarted_client.post(
+                f"/api/realtime/sessions/{session_id}/discard?target=fake",
+                json=discard_body,
+            )
+            assert discard_duplicate.status_code == 200
+            assert discard_duplicate.json() == expected_discard
+            assert fake_app.state.realtime_control_calls[
+                ("manual_audio_discard", session_id)
+            ] == 1
 
 
 def test_uniform_mutation_unknown_result_is_202_and_queryable(console):
@@ -1034,7 +1109,6 @@ def test_manual_controls_are_typed_idempotent_and_reconciled(console):
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "idempotency_conflict"
-
     stale = client.post(
         f"{base}/turn-mode?target=fake",
         json={
@@ -1142,6 +1216,135 @@ def test_ambiguous_manual_commit_reconciles_without_provider_retry(console):
     assert app.state.fake_hermes_app.state.realtime_control_calls[
         ("manual_audio_commit", session_id)
     ] == 1
+
+
+def test_manual_audio_discard_clears_staged_audio_and_is_durable(console):
+    client, app, conversation_id = console
+    app.state.console_state.realtime.request_timeout_seconds = 0.05
+    fake = app.state.fake_hermes_app
+    session = create_realtime(client, conversation_id, "discard_create_1").json()
+    session_id = session["realtime_session_id"]
+    generation = session["session_generation"]
+    base = f"/api/realtime/sessions/{session_id}"
+    mode = client.post(
+        f"{base}/turn-mode?target=fake",
+        json={
+            "client_request_id": "discard_mode_1",
+            "session_generation": generation,
+            "turn_mode": "manual",
+        },
+    )
+    assert mode.status_code == 200
+    fake.state.realtime_audio_buffers[session_id].extend(["old-audio-1", "old-audio-2"])
+
+    body = {
+        "client_request_id": "discard_manual_1",
+        "session_generation": generation,
+    }
+    discarded = client.post(f"{base}/discard?target=fake", json=body)
+    duplicate = client.post(f"{base}/discard?target=fake", json=body)
+    assert discarded.status_code == duplicate.status_code == 200
+    assert discarded.json() == duplicate.json() == {
+        "client_request_id": "discard_manual_1",
+        "realtime_session_id": session_id,
+        "session_generation": generation,
+        "state": "accepted",
+        "audio_discard_requested": True,
+    }
+    assert fake.state.realtime_audio_buffers[session_id] == []
+    assert fake.state.realtime_control_calls[("manual_audio_discard", session_id)] == 1
+
+    fake.state.realtime_audio_buffers[session_id].append("new-audio")
+    committed = client.post(
+        f"{base}/commit?target=fake",
+        json={
+            "client_request_id": "commit_after_discard_1",
+            "session_generation": generation,
+        },
+    )
+    assert committed.status_code == 200
+    assert fake.state.realtime_committed_audio[session_id] == [["new-audio"]]
+
+    conflict = client.post(
+        f"{base}/discard?target=fake",
+        json={**body, "session_generation": generation + 1},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "idempotency_conflict"
+
+    stale = client.post(
+        f"{base}/discard?target=fake",
+        json={
+            "client_request_id": "discard_stale_1",
+            "session_generation": generation + 1,
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "manual_audio_discard_unavailable"
+
+    rejection_body = {
+        "client_request_id": "reject_discard_manual_1",
+        "session_generation": generation,
+    }
+    rejected = client.post(f"{base}/discard?target=fake", json=rejection_body)
+    rejected_duplicate = client.post(
+        f"{base}/discard?target=fake", json=rejection_body
+    )
+    expected_rejection = {
+        "client_request_id": "reject_discard_manual_1",
+        "operation": "manual_audio_discard",
+        "state": "rejected",
+        "accepted": False,
+        "error": {"code": "audio_discard_rejected"},
+    }
+    assert rejected.status_code == rejected_duplicate.status_code == 409
+    assert rejected.json() == rejected_duplicate.json() == expected_rejection
+    lookup = client.get(
+        f"/api/realtime/conversations/{conversation_id}/requests/"
+        "reject_discard_manual_1?target=fake"
+    )
+    assert lookup.status_code == 200
+    assert lookup.json() == expected_rejection
+
+    fake.state.realtime_sessions[session_id]["manual_capture_active"] = True
+    automatic = client.post(
+        f"{base}/turn-mode?target=fake",
+        json={
+            "client_request_id": "automatic_during_capture_1",
+            "session_generation": generation,
+            "turn_mode": "automatic",
+        },
+    )
+    assert automatic.status_code == 409
+    assert automatic.json()["error"]["code"] == "turn_mode_update_unavailable"
+    fake.state.realtime_sessions[session_id]["manual_capture_active"] = False
+
+    unknown_body = {
+        "client_request_id": "unknown_discard_manual_1",
+        "session_generation": generation,
+    }
+    unknown = client.post(f"{base}/discard?target=fake", json=unknown_body)
+    unknown_duplicate = client.post(
+        f"{base}/discard?target=fake", json=unknown_body
+    )
+    assert unknown.status_code == unknown_duplicate.status_code == 202
+    assert unknown.json() == unknown_duplicate.json() == {
+        "client_request_id": "unknown_discard_manual_1",
+        "operation": "manual_audio_discard",
+        "state": "outcome_unknown",
+        "accepted": False,
+    }
+
+    ambiguous = client.post(
+        f"{base}/discard?target=fake",
+        json={
+            "client_request_id": "ambiguous_discard_manual_1",
+            "session_generation": generation,
+        },
+    )
+    assert ambiguous.status_code == 200
+    assert ambiguous.json()["audio_discard_requested"] is True
+    assert fake.state.realtime_control_calls[("manual_audio_discard", session_id)] == 3
 
 
 def test_session_mapping_rejects_compromised_identifier_collision(tmp_path):

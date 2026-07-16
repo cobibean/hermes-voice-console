@@ -26,6 +26,7 @@ REQUIRED_ENDPOINTS = {
     "/v1/realtime/sessions/{session_id}/activate": "POST",
     "/v1/realtime/sessions/{session_id}/input": "POST",
     "/v1/realtime/sessions/{session_id}/commit": "POST",
+    "/v1/realtime/sessions/{session_id}/discard": "POST",
     "/v1/realtime/sessions/{session_id}/turn-mode": "POST",
     "/v1/realtime/sessions/{session_id}/interrupt": "POST",
     "/v1/realtime/sessions/{session_id}/events": "GET",
@@ -136,6 +137,7 @@ def check_realtime_compatibility(capabilities: Mapping[str, Any]) -> RealtimeCom
             "conversation_snapshot",
             "text_input",
             "manual_audio_commit",
+            "manual_audio_discard",
             "speech_interrupt",
             "turn_mode_update",
         )
@@ -228,7 +230,7 @@ def _safe_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
         "provider": ("id", "model", "voice", "reasoning_effort"),
         "sessions": (
             "rotation", "conversation_snapshot", "text_input", "manual_audio_commit",
-            "speech_interrupt", "turn_modes", "turn_mode_update",
+            "manual_audio_discard", "speech_interrupt", "turn_modes", "turn_mode_update",
         ),
         "events": ("replay", "durable", "cursor", "gap_error"),
         "tools": ("execution", "direct_allowlist", "delegation_tool", "raw_delegate_task_exposed"),

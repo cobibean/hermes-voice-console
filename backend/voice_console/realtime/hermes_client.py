@@ -90,6 +90,7 @@ class HermesRealtimeClient:
     ) -> dict[str, Any]:
         paths = {
             "manual_audio_commit": "commit",
+            "manual_audio_discard": "discard",
             "turn_mode_update": "turn-mode",
         }
         if operation not in paths:
@@ -216,7 +217,11 @@ class HermesRealtimeClient:
         if status_code >= 400:
             if (
                 status_code == 409
-                and mutation == "manual_audio_commit"
+                and mutation in {
+                    "manual_audio_commit",
+                    "manual_audio_discard",
+                    "turn_mode_update",
+                }
                 and document.get("state") == "rejected"
             ):
                 return document
@@ -251,6 +256,10 @@ def _public_upstream_error(document: Mapping[str, Any], status: int) -> tuple[st
         "manual_audio_commit_unavailable": (
             "manual_audio_commit_unavailable",
             "Manual audio commit is unavailable for this session",
+        ),
+        "manual_audio_discard_unavailable": (
+            "manual_audio_discard_unavailable",
+            "Manual audio discard is unavailable for this session",
         ),
         "turn_mode_update_unavailable": (
             "turn_mode_update_unavailable",

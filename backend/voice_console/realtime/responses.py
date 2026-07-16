@@ -177,6 +177,50 @@ def parse_manual_audio_commit_result(
     }
 
 
+def parse_manual_audio_discard_result(
+    document: Mapping[str, Any], *, session_id: str, session_generation: int,
+    client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(
+        document,
+        client_request_id=client_request_id,
+        operation="manual_audio_discard",
+    )
+    if document.get("state") == "rejected":
+        error = document.get("error")
+        if (
+            document.get("operation") != "manual_audio_discard"
+            or document.get("accepted") is not False
+            or not isinstance(error, Mapping)
+            or set(error) != {"code"}
+            or error.get("code") != "audio_discard_rejected"
+        ):
+            _invalid("manual audio discard rejection")
+        return {
+            "client_request_id": client_request_id,
+            "operation": "manual_audio_discard",
+            "state": "rejected",
+            "accepted": False,
+            "error": {"code": "audio_discard_rejected"},
+        }
+    if _id(document, "realtime_session_id") != session_id:
+        _mismatch("session")
+    if document.get("session_generation") != session_generation:
+        _mismatch("session generation")
+    if (
+        document.get("state") != "accepted"
+        or document.get("audio_discard_requested") is not True
+    ):
+        _invalid("manual audio discard acceptance")
+    return {
+        "client_request_id": client_request_id,
+        "realtime_session_id": session_id,
+        "session_generation": session_generation,
+        "state": "accepted",
+        "audio_discard_requested": True,
+    }
+
+
 def parse_turn_mode_result(
     document: Mapping[str, Any], *, session_id: str, session_generation: int,
     client_request_id: str, turn_mode: str,
@@ -237,7 +281,7 @@ def parse_request_state(
     if raw_operation is not None:
         if raw_operation not in {
             "create", "activate", "input", "manual_audio_commit",
-            "turn_mode_update", "interrupt", "approval", "delete",
+            "manual_audio_discard", "turn_mode_update", "interrupt", "approval", "delete",
         }:
             _invalid("request operation")
         if operation is not None and raw_operation != operation:

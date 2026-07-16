@@ -128,7 +128,11 @@ async def handle_realtime_socket(ws: WebSocket, state: ConsoleState) -> None:
                     result = await state.realtime.session_action(
                         session_id, kind, body, target_name=target, auth_context=auth_context
                     )
-                elif kind in {"manual_audio_commit", "turn_mode_update"}:
+                elif kind in {
+                    "manual_audio_commit",
+                    "manual_audio_discard",
+                    "turn_mode_update",
+                }:
                     body = {
                         "client_request_id": request_id,
                         "session_generation": frame.get("session_generation"),

@@ -22,6 +22,7 @@ session creation, where it is a JSON field.
 | `POST` | `/api/realtime/sessions/{session_id}/activate` | `target`; `{session_generation, client_request_id}` |
 | `POST` | `/api/realtime/sessions/{session_id}/input` | `target`; `{session_generation, client_request_id, text}` |
 | `POST` | `/api/realtime/sessions/{session_id}/commit` | `target`; `{session_generation, client_request_id}` |
+| `POST` | `/api/realtime/sessions/{session_id}/discard` | `target`; `{session_generation, client_request_id}` |
 | `POST` | `/api/realtime/sessions/{session_id}/turn-mode` | `target`; `{session_generation, client_request_id, turn_mode}` |
 | `POST` | `/api/realtime/sessions/{session_id}/interrupt` | `target`; `{session_generation, client_request_id}` |
 | `GET` | `/api/realtime/sessions/{session_id}/events` | `target`, optional opaque `after` |
@@ -54,6 +55,10 @@ valid only while the authoritative session is manual. Its success acknowledges b
 commit and response creation. A correlated empty buffer is a durable HTTP 409 result with
 `state: "rejected"` and `error.code: "audio_buffer_empty"`; exact duplicates and request lookup
 return that same result without another provider action.
+Manual audio discard clears staged input without requesting a response and returns
+`audio_discard_requested: true`. It uses the same durable duplicate, rejection, and ambiguous-result
+reconciliation rules as commit. Clients serialize capture teardown before requesting automatic
+mode; if capture is still active, the proxy preserves Hermes' authoritative HTTP 409.
 
 Errors use `{error: {code, message}}`. Provider and target exception text is never reflected.
 Request bodies, SDP, response documents, cursor lengths, and target request durations are bounded.
@@ -63,7 +68,8 @@ must be `{type: "subscribe", target, conversation_id, realtime_session_id, after
 authoritative snapshot before replay events and accepts bounded `input`, `interrupt`, `approval`,
 `manual_audio_commit`, `turn_mode_update`, and `worker.command` frames. Manual frames are
 `{type: "turn_mode_update", client_request_id, session_generation, turn_mode}` and
-`{type: "manual_audio_commit", client_request_id, session_generation}`. Both return
+`{type: "manual_audio_commit", client_request_id, session_generation}`.
+`{type: "manual_audio_discard", client_request_id, session_generation}` clears staged audio. All return
 `{type: "ack", client_request_id, result}`. Heartbeats, send deadlines, replay-gap snapshots, and a
 slow-consumer close policy keep this channel independent from the legacy `/ws/voice` state machine.
 

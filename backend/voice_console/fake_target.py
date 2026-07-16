@@ -32,6 +32,8 @@ def create_fake_hermes_app() -> FastAPI:
     app.state.realtime_overrides = {}
     app.state.realtime_create_payloads = []
     app.state.realtime_control_calls = {}
+    app.state.realtime_audio_buffers = {}
+    app.state.realtime_committed_audio = {}
     app.state.worker_command_calls = {}
 
     def overridden(name: str, document: dict[str, Any]) -> dict[str, Any]:
@@ -122,6 +124,7 @@ def create_fake_hermes_app() -> FastAPI:
                 "realtime_session_activate": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/activate"},
                 "realtime_session_input": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/input"},
                 "realtime_session_manual_audio_commit": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/commit"},
+                "realtime_session_manual_audio_discard": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/discard"},
                 "realtime_session_turn_mode_update": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/turn-mode"},
                 "realtime_session_interrupt": {"method": "POST", "path": "/v1/realtime/sessions/{session_id}/interrupt"},
                 "realtime_session_events": {"method": "GET", "path": "/v1/realtime/sessions/{session_id}/events"},
@@ -148,7 +151,7 @@ def create_fake_hermes_app() -> FastAPI:
                     "provider": {"id": "openai", "model": "gpt-realtime-2.1", "voice": "marin", "reasoning_effort": None},
                     "models": ["gpt-realtime-2.1"],
                     "sideband_authority": "server",
-                    "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "manual_audio_commit": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"], "turn_mode_update": True},
+                    "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "manual_audio_commit": True, "manual_audio_discard": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"], "turn_mode_update": True},
                     "events": {"replay": True, "durable": True, "cursor": "event_id", "gap_error": "event_replay_gap"},
                     "tools": {"execution": "server", "direct_allowlist": ["get_status"], "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
                     "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "command_result_lookup": True, "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
@@ -396,6 +399,8 @@ def create_fake_hermes_app() -> FastAPI:
             "answer_sdp": "v=0\r\na=fake-answer",
         }
         app.state.realtime_sessions[session_id] = result
+        app.state.realtime_audio_buffers[session_id] = []
+        app.state.realtime_committed_audio[session_id] = []
         app.state.realtime_by_conversation[conversation_id] = session_id
         app.state.realtime_requests[request_key] = result
         app.state.realtime_events[conversation_id] = [
@@ -543,12 +548,49 @@ def create_fake_hermes_app() -> FastAPI:
                 "audio_commit_requested": True,
                 "response_requested": True,
             }
+            app.state.realtime_committed_audio[session_id].append(
+                list(app.state.realtime_audio_buffers[session_id])
+            )
+            app.state.realtime_audio_buffers[session_id].clear()
+        elif operation == "manual_audio_discard":
+            if document["turn_mode"] != "manual":
+                return JSONResponse(
+                    status_code=409,
+                    content={"error": {"code": "manual_audio_discard_unavailable"}},
+                )
+            key = (operation, session_id)
+            app.state.realtime_control_calls[key] = (
+                app.state.realtime_control_calls.get(key, 0) + 1
+            )
+            if request_id.startswith("reject_discard"):
+                result = {
+                    "client_request_id": request_id,
+                    "operation": operation,
+                    "state": "rejected",
+                    "accepted": False,
+                    "error": {"code": "audio_discard_rejected"},
+                }
+                app.state.realtime_requests[(conversation_id, request_id)] = result
+                return JSONResponse(status_code=409, content=result)
+            app.state.realtime_audio_buffers[session_id].clear()
+            result = {
+                "client_request_id": request_id,
+                "realtime_session_id": session_id,
+                "session_generation": document["session_generation"],
+                "state": "accepted",
+                "audio_discard_requested": True,
+            }
         else:
             turn_mode = body.get("turn_mode")
             if turn_mode not in {"automatic", "manual"}:
                 return JSONResponse(
                     status_code=400,
                     content={"error": {"code": "invalid_turn_mode"}},
+                )
+            if turn_mode == "automatic" and document.get("manual_capture_active"):
+                return JSONResponse(
+                    status_code=409,
+                    content={"error": {"code": "turn_mode_update_unavailable"}},
                 )
             key = (operation, session_id)
             app.state.realtime_control_calls[key] = (
@@ -572,6 +614,12 @@ def create_fake_hermes_app() -> FastAPI:
     async def realtime_commit(session_id: str, request: Request):
         return await manual_control_document(
             session_id, request, "manual_audio_commit"
+        )
+
+    @app.post("/v1/realtime/sessions/{session_id}/discard")
+    async def realtime_discard(session_id: str, request: Request):
+        return await manual_control_document(
+            session_id, request, "manual_audio_discard"
         )
 
     @app.post("/v1/realtime/sessions/{session_id}/turn-mode")

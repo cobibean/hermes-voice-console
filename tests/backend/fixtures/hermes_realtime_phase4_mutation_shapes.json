@@ -1,7 +1,7 @@
 {
   "source_repository": "hermes-agent-realtime",
-  "source_commit": "810ac2b946aeaddffa2a5d7e91035ec8505c9ec4",
-  "phase4_2_status": "locked",
+  "source_commit": "d41e793a355ae1bb9dc2c974d1fd2edc8b6c6a61",
+  "phase4_3_status": "locked",
   "source_files": ["gateway/platforms/api_server.py", "gateway/realtime/api.py", "gateway/realtime/contracts.py", "gateway/realtime/http.py", "gateway/realtime/session_manager.py", "gateway/realtime/state.py", "gateway/worker_jobs/runtime.py", "gateway/worker_jobs/store.py"],
   "contract_version": "1.0",
   "mutations": {
@@ -28,6 +28,16 @@
       "keys": ["client_request_id", "operation", "state", "accepted", "error"],
       "types": {"client_request_id": "string", "operation": "string", "state": "string", "accepted": "boolean", "error": "object"},
       "constants": {"operation": "manual_audio_commit", "state": "rejected", "accepted": false, "error": {"code": "audio_buffer_empty"}}
+    },
+    "manual_audio_discard": {
+      "keys": ["client_request_id", "realtime_session_id", "session_generation", "state", "audio_discard_requested"],
+      "types": {"client_request_id": "string", "realtime_session_id": "string", "session_generation": "integer", "state": "string", "audio_discard_requested": "boolean"},
+      "constants": {"state": "accepted", "audio_discard_requested": true}
+    },
+    "manual_audio_discard_rejected": {
+      "keys": ["client_request_id", "operation", "state", "accepted", "error"],
+      "types": {"client_request_id": "string", "operation": "string", "state": "string", "accepted": "boolean", "error": "object"},
+      "constants": {"operation": "manual_audio_discard", "state": "rejected", "accepted": false, "error": {"code": "audio_discard_rejected"}}
     },
     "turn_mode_update": {
       "keys": ["client_request_id", "realtime_session_id", "session_generation", "turn_mode", "state"],

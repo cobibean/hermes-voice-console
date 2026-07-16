@@ -31,6 +31,7 @@ from .responses import (
     parse_job_events,
     parse_job_list,
     parse_manual_audio_commit_result,
+    parse_manual_audio_discard_result,
     parse_request_state,
     parse_session,
     parse_snapshot,
@@ -340,7 +341,11 @@ class RealtimeProxyService:
         target_name: str,
         auth_context: AuthContext,
     ) -> dict[str, Any]:
-        if operation not in {"manual_audio_commit", "turn_mode_update"}:
+        if operation not in {
+            "manual_audio_commit",
+            "manual_audio_discard",
+            "turn_mode_update",
+        }:
             raise RealtimeProxyError(
                 "invalid_request", "Unsupported manual control", status=400
             )
@@ -407,6 +412,13 @@ class RealtimeProxyService:
             return pending
         if operation == "manual_audio_commit":
             result = parse_manual_audio_commit_result(
+                raw,
+                session_id=session_id,
+                session_generation=generation,
+                client_request_id=request_id,
+            )
+        elif operation == "manual_audio_discard":
+            result = parse_manual_audio_discard_result(
                 raw,
                 session_id=session_id,
                 session_generation=generation,
@@ -768,6 +780,27 @@ class RealtimeProxyService:
             and raw.get("state") == "rejected"
         ):
             result = parse_manual_audio_commit_result(
+                raw,
+                session_id="rejected",
+                session_generation=1,
+                client_request_id=request_id,
+            )
+        elif raw.get("audio_discard_requested") is True:
+            session_id = validate_identifier(
+                str(raw.get("realtime_session_id") or ""), "realtime_session_id"
+            )
+            generation = validate_generation(raw.get("session_generation"))
+            result = parse_manual_audio_discard_result(
+                raw,
+                session_id=session_id,
+                session_generation=generation,
+                client_request_id=request_id,
+            )
+        elif (
+            raw.get("operation") == "manual_audio_discard"
+            and raw.get("state") == "rejected"
+        ):
+            result = parse_manual_audio_discard_result(
                 raw,
                 session_id="rejected",
                 session_generation=1,
