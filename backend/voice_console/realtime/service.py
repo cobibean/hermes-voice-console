@@ -644,12 +644,38 @@ class RealtimeProxyService:
                 conversation_id, worker_job_id, operation, forwarded
             )
         except AmbiguousRealtimeMutation:
-            job = await client.worker_job(conversation_id, worker_job_id)
-            reconciled = _find_command(job, command_id)
-            if reconciled is None:
+            try:
+                raw = await client.worker_command_result(
+                    conversation_id, worker_job_id, command_id
+                )
+            except RealtimeProxyError as exc:
+                if exc.code == "resource_not_found":
+                    raise AmbiguousRealtimeMutation("worker command") from exc
                 raise
-            raw = reconciled
         return parse_command(raw, command_id=command_id, worker_job_id=worker_job_id)
+
+    async def worker_command_result(
+        self,
+        conversation_id: str,
+        worker_job_id: str,
+        command_id: str,
+        *,
+        target_name: str,
+        auth_context: AuthContext,
+    ) -> dict[str, Any]:
+        validate_identifier(conversation_id, "conversation_id")
+        target = self.target(target_name)
+        self.require_conversation(
+            conversation_id, target=target, auth_context=auth_context
+        )
+        validate_identifier(worker_job_id, "worker_job_id")
+        validate_identifier(command_id, "command_id")
+        raw = await self.client(target).worker_command_result(
+            conversation_id, worker_job_id, command_id
+        )
+        return parse_command(
+            raw, command_id=command_id, worker_job_id=worker_job_id
+        )
 
     async def _owned_session(
         self,
@@ -785,13 +811,3 @@ class RealtimeProxyService:
             )
         result["client_request_id"] = request_id
         return result
-
-
-def _find_command(job: Mapping[str, Any], command_id: str) -> dict[str, Any] | None:
-    for key in ("commands", "command_history"):
-        values = job.get(key)
-        if isinstance(values, list):
-            for item in values:
-                if isinstance(item, dict) and item.get("command_id") == command_id:
-                    return item
-    return None

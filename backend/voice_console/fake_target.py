@@ -32,6 +32,7 @@ def create_fake_hermes_app() -> FastAPI:
     app.state.realtime_overrides = {}
     app.state.realtime_create_payloads = []
     app.state.realtime_control_calls = {}
+    app.state.worker_command_calls = {}
 
     def overridden(name: str, document: dict[str, Any]) -> dict[str, Any]:
         return {**document, **(app.state.realtime_overrides.get(name) or {})}
@@ -130,6 +131,7 @@ def create_fake_hermes_app() -> FastAPI:
                 "realtime_worker_jobs": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs"},
                 "realtime_worker_job": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}"},
                 "realtime_worker_job_events": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/events"},
+                "realtime_worker_job_command_result": {"method": "GET", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/commands/{command_id}"},
                 "realtime_worker_job_refine": {"method": "POST", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/refine"},
                 "realtime_worker_job_redirect": {"method": "POST", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/redirect"},
                 "realtime_worker_job_cancel": {"method": "POST", "path": "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/cancel"},
@@ -149,8 +151,8 @@ def create_fake_hermes_app() -> FastAPI:
                     "sessions": {"rotation": True, "conversation_snapshot": True, "text_input": True, "manual_audio_commit": True, "speech_interrupt": True, "turn_modes": ["server_vad", "manual"], "turn_mode_update": True},
                     "events": {"replay": True, "durable": True, "cursor": "event_id", "gap_error": "event_replay_gap"},
                     "tools": {"execution": "server", "direct_allowlist": ["get_status"], "delegation_tool": "delegate_work", "raw_delegate_task_exposed": False},
-                    "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
-                    "approvals": {"server_authoritative": True, "choices": ["once", "deny"]},
+                    "workers": {"lead_model": "gpt-5.6-sol", "max_concurrency": 1, "max_fanout": 1, "queue": "fifo_per_conversation", "commands": ["refine", "redirect", "cancel"], "command_result_lookup": True, "ownership": "conversation_path", "optimistic_revision": True, "delivery": {"realtime_projection": "exactly_once_durable_inbox", "external_claims": "at_least_once_lease_ack"}},
+                    "approvals": {"server_authoritative": True, "choices": ["once", "deny"], "pending_snapshot_fields": ["approval_id", "state", "tool_call_id", "tool_name", "expires_at"]},
                     "routing_policy": {"persona_model": "gpt-realtime-2.1", "substantial_work": "delegate", "default_fanout": 1, "confirmation": "announce_without_prompting"},
                     "retention": {"event_count": 2048, "event_bytes": 4194304, "context_bytes": 65536, "completed_item_days": 30},
                     "timeouts": {"provider_request_seconds": 30, "controller_ready_seconds": 10, "tool_seconds": 120, "worker_seconds": 3600, "approval_seconds": 300},
@@ -615,7 +617,13 @@ def create_fake_hermes_app() -> FastAPI:
             "contract_version": "1.0",
             "conversation_id": conversation_id,
             "session": app.state.realtime_sessions.get(session_id),
-            "pending_approvals": [{"approval_id": "approval_1", "state": "pending"}],
+            "pending_approvals": [{
+                "approval_id": "approval_1",
+                "state": "pending",
+                "tool_call_id": "call_1",
+                "tool_name": "run_shell",
+                "expires_at": time.time() + 300,
+            }],
             "worker_jobs": list(app.state.worker_jobs.get(conversation_id, {}).values()),
             "last_event_id": "ev_3",
         })
@@ -654,6 +662,25 @@ def create_fake_hermes_app() -> FastAPI:
         events = [item for item in job["events"] if item["event_id"] > after]
         return {"worker_job_id": worker_job_id, "events": events, "last_event_id": events[-1]["event_id"] if events else after}
 
+    @app.get(worker_path + "/{worker_job_id}/commands/{command_id}")
+    async def realtime_worker_command_result(
+        conversation_id: str,
+        worker_job_id: str,
+        command_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        require_realtime_auth(request)
+        job = app.state.worker_jobs.get(conversation_id, {}).get(worker_job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Worker job not found")
+        result = next(
+            (item for item in job["commands"] if item["command_id"] == command_id),
+            None,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="Worker command not found")
+        return dict(result)
+
     async def worker_command(conversation_id: str, worker_job_id: str, operation: str, request: Request) -> dict[str, Any]:
         require_realtime_auth(request)
         body = await request.json()
@@ -661,6 +688,9 @@ def create_fake_hermes_app() -> FastAPI:
         if job is None:
             raise HTTPException(status_code=404, detail="Worker job not found")
         command_id = body.get("command_id")
+        app.state.worker_command_calls[command_id] = (
+            app.state.worker_command_calls.get(command_id, 0) + 1
+        )
         existing = next((item for item in job["commands"] if item["command_id"] == command_id), None)
         if existing is not None:
             return {
@@ -703,6 +733,9 @@ def create_fake_hermes_app() -> FastAPI:
             "operation": operation,
             "control_signal_sent": True,
         }
+        if str(command_id).startswith("ambiguous_missing"):
+            await asyncio.sleep(0.2)
+            return result
         job["commands"].append(result)
         if str(command_id).startswith("ambiguous"):
             await asyncio.sleep(0.2)

@@ -121,7 +121,10 @@ def assert_phase4_shape(document: dict, shape: dict) -> None:
         "object": dict,
     }
     for key, type_name in shape["types"].items():
-        assert type(document[key]) is expected_types[type_name]
+        if type_name == "number":
+            assert type(document[key]) in {int, float}
+        else:
+            assert type(document[key]) is expected_types[type_name]
     for key, value in shape.get("constants", {}).items():
         assert document[key] == value
 
@@ -135,7 +138,8 @@ def test_fake_target_matches_frozen_hermes_phase4_mutation_shapes(console):
             / "hermes_realtime_phase4_mutation_shapes.json"
         ).read_text()
     )
-    assert fixture["source_commit"] == "351da78c98564002effa32d57f5c8fd2fedfa1e9"
+    assert fixture["source_commit"] == "810ac2b946aeaddffa2a5d7e91035ec8505c9ec4"
+    assert fixture["phase4_2_status"] == "locked"
     shapes = fixture["mutations"]
     fake = app.state.fake_hermes_app
 
@@ -274,6 +278,14 @@ def test_capability_negotiation_is_strict_and_preserves_rich_contract(console):
     assert document["contract"]["models"] == ["gpt-realtime-2.1"]
     assert "behaviors" not in document["contract"]
     assert document["contract"]["workers"]["commands"] == ["refine", "redirect", "cancel"]
+    assert document["contract"]["workers"]["command_result_lookup"] is True
+    assert document["contract"]["approvals"]["pending_snapshot_fields"] == [
+        "approval_id",
+        "state",
+        "tool_call_id",
+        "tool_name",
+        "expires_at",
+    ]
     assert document["contract"]["sessions"]["manual_audio_commit"] is True
     assert document["contract"]["sessions"]["turn_mode_update"] is True
     assert "Bearer fake" not in response.text
@@ -403,6 +415,17 @@ def test_worker_job_routes_commands_and_idempotency(console):
     )["mutations"]["worker_command"]
     assert_phase4_shape(first.json(), shape)
     assert_phase4_shape(second.json(), shape)
+    lookup_path = (
+        f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/"
+        "commands/command_1?target=fake"
+    )
+    looked_up = client.get(lookup_path)
+    assert looked_up.status_code == 200
+    assert looked_up.json() == first.json()
+    missing = client.get(lookup_path.replace("command_1", "command_missing"))
+    wrong_job = client.get(lookup_path.replace("job_1", "job_missing"))
+    assert missing.status_code == wrong_job.status_code == 404
+    assert missing.json()["error"]["code"] == "resource_not_found"
 
     stale_command = {
         "command_id": "command_stale_1",
@@ -470,6 +493,12 @@ def test_ownership_is_checked_for_every_conversation_route(console):
     )
     assert denied.status_code == 404
     assert denied.json()["error"]["code"] == "conversation_not_found"
+    denied_command = client.get(
+        "/api/realtime/conversations/hvc_other_owner/worker-jobs/job_1/"
+        "commands/command_1?target=fake"
+    )
+    assert denied_command.status_code == 404
+    assert denied_command.json()["error"]["code"] == "conversation_not_found"
 
 
 def test_ambiguous_create_and_command_are_reconciled_without_retry(console):
@@ -592,6 +621,39 @@ def test_compromised_target_documents_are_sanitized_or_rejected(console):
     assert "[redacted]" in sanitized.text
     fake.state.realtime_overrides.pop("conversation")
 
+    fake.state.realtime_overrides["conversation"] = {
+        "pending_approvals": [
+            {
+                "approval_id": "approval_legacy",
+                "state": "pending",
+                "tool_call_id": "call_legacy",
+                "tool_name": "Unknown tool",
+                "expires_at": time.time() + 300,
+            }
+        ]
+    }
+    legacy_name = client.get(
+        f"/api/realtime/conversations/{conversation_id}?target=fake"
+    )
+    assert legacy_name.status_code == 200
+    assert legacy_name.json()["pending_approvals"][0]["tool_name"] == "Unknown tool"
+    fake.state.realtime_overrides["conversation"] = {
+        "pending_approvals": [
+            {
+                "approval_id": "approval_missing_name",
+                "state": "pending",
+                "tool_call_id": "call_missing_name",
+                "expires_at": time.time() + 300,
+            }
+        ]
+    }
+    missing_name = client.get(
+        f"/api/realtime/conversations/{conversation_id}?target=fake"
+    )
+    assert missing_name.status_code == 502
+    assert missing_name.json()["error"]["code"] == "invalid_target_response"
+    fake.state.realtime_overrides.pop("conversation")
+
     fake.state.realtime_overrides["worker_job"] = {
         "worker_job_id": "job_wrong",
         "api_key": "sk-worker-secret",
@@ -615,7 +677,8 @@ def test_upstream_arbitrary_error_body_is_never_reflected(console):
 
 
 def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(console):
-    client, _app, conversation_id = console
+    client, app, conversation_id = console
+    app.state.console_state.realtime.request_timeout_seconds = 0.05
     session = create_realtime(client, conversation_id).json()
     with client.websocket_connect("/ws/realtime") as socket:
         socket.send_json({"type": "auth"})
@@ -629,7 +692,27 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
                 "after": "ev_1",
             }
         )
-        assert socket.receive_json()["type"] == "snapshot"
+        snapshot_frame = socket.receive_json()
+        assert snapshot_frame["type"] == "snapshot"
+        pending = snapshot_frame["snapshot"]["pending_approvals"]
+        assert len(pending) == 1
+        assert set(pending[0]) == {
+            "approval_id",
+            "state",
+            "tool_call_id",
+            "tool_name",
+            "expires_at",
+        }
+        assert pending[0]["tool_name"] == "run_shell"
+        assert "args" not in pending[0]
+        approval_shape = json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "hermes_realtime_phase4_mutation_shapes.json"
+            ).read_text()
+        )["mutations"]["pending_approval_snapshot"]
+        assert_phase4_shape(pending[0], approval_shape)
         subscribed = socket.receive_json()
         assert subscribed["type"] == "subscribed"
         assert subscribed["after"] == "ev_3"
@@ -689,7 +772,7 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
         socket.send_json(
             {
                 "type": "worker.command",
-                "client_request_id": "ws_worker_1",
+                "client_request_id": "ambiguous_ws_worker_1",
                 "worker_job_id": "job_1",
                 "operation": "refine",
                 "expected_revision": 1,
@@ -699,9 +782,9 @@ def test_dedicated_realtime_control_socket_subscribes_replays_and_controls(conso
         worker_ack = socket.receive_json()
         assert worker_ack == {
             "type": "ack",
-            "client_request_id": "ws_worker_1",
+            "client_request_id": "ambiguous_ws_worker_1",
             "result": {
-                "command_id": "ws_worker_1",
+                "command_id": "ambiguous_ws_worker_1",
                 "worker_job_id": "job_1",
                 "acknowledgement": "applied",
                 "revision": 2,
@@ -728,6 +811,40 @@ def test_realtime_control_socket_rejects_oversized_frames(console):
         socket.receive_json()
         socket.receive_json()
     assert closed.value.code == 4400
+
+
+def test_worker_command_socket_reports_unreconciled_ambiguity_without_retry(console):
+    client, app, conversation_id = console
+    app.state.console_state.realtime.request_timeout_seconds = 0.05
+    session = create_realtime(client, conversation_id, "ws_ambiguous_create").json()
+    command_id = "ambiguous_missing_ws_command_1"
+    with client.websocket_connect("/ws/realtime") as socket:
+        socket.send_json({"type": "auth"})
+        assert socket.receive_json()["type"] == "auth.ok"
+        socket.send_json(
+            {
+                "type": "subscribe",
+                "target": "fake",
+                "conversation_id": conversation_id,
+                "realtime_session_id": session["realtime_session_id"],
+            }
+        )
+        assert socket.receive_json()["type"] == "snapshot"
+        assert socket.receive_json()["type"] == "subscribed"
+        socket.send_json(
+            {
+                "type": "worker.command",
+                "client_request_id": command_id,
+                "worker_job_id": "job_1",
+                "operation": "cancel",
+                "expected_revision": 1,
+                "payload": {},
+            }
+        )
+        error = socket.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == "ambiguous_acceptance"
+    assert app.state.fake_hermes_app.state.worker_command_calls[command_id] == 1
 
 
 def test_delete_is_request_idempotent_without_replaying_target_mutation(console):
@@ -786,6 +903,50 @@ def test_content_free_mapping_and_request_ledger_survive_reopen(tmp_path):
         == "complete"
     )
     reopened.close()
+
+
+def test_worker_command_result_lookup_survives_proxy_restart(tmp_path, monkeypatch):
+    port = free_port()
+    monkeypatch.setenv("FAKE_HERMES_API_KEY", API_KEY)
+    voice, targets = write_app_config(tmp_path, port)
+    fake_app = create_fake_hermes_app()
+    with Server(fake_app, port):
+        first_app = create_app(
+            config_path=voice,
+            targets_path=targets,
+            env_path=None,
+            static_dir=None,
+        )
+        with TestClient(first_app) as first_client:
+            created = first_client.post(
+                "/api/sessions", json={"target": "fake", "title": "Restart lookup"}
+            )
+            conversation_id = created.json()["conversation_id"]
+            create_realtime(first_client, conversation_id, "restart_create_1")
+            command = first_client.post(
+                f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/cancel?target=fake",
+                json={
+                    "command_id": "restart_command_1",
+                    "expected_revision": 1,
+                    "payload": {},
+                },
+            )
+            assert command.status_code == 200
+            expected = command.json()
+
+        restarted_app = create_app(
+            config_path=voice,
+            targets_path=targets,
+            env_path=None,
+            static_dir=None,
+        )
+        with TestClient(restarted_app) as restarted_client:
+            looked_up = restarted_client.get(
+                f"/api/realtime/conversations/{conversation_id}/worker-jobs/job_1/"
+                "commands/restart_command_1?target=fake"
+            )
+            assert looked_up.status_code == 200
+            assert looked_up.json() == expected
 
 
 def test_uniform_mutation_unknown_result_is_202_and_queryable(console):

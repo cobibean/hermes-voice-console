@@ -424,13 +424,11 @@ def parse_snapshot(document: Mapping[str, Any], *, conversation_id: str) -> dict
         value = document.get(key, [])
         if not isinstance(value, list):
             _invalid(key)
-        result[key] = [_safe(item) for item in value[:500]]
-    for approval in result["pending_approvals"]:
-        if not isinstance(approval, dict) or not approval.get("approval_id"):
-            _invalid("pending approval")
-        validate_identifier(str(approval["approval_id"]), "approval_id")
-        if approval.get("conversation_id") not in {None, conversation_id}:
-            _mismatch("approval conversation")
+        result[key] = (
+            [_parse_pending_approval(item) for item in value[:500]]
+            if key == "pending_approvals"
+            else [_safe(item) for item in value[:500]]
+        )
     jobs = document.get("worker_jobs", [])
     if not isinstance(jobs, list):
         _invalid("worker jobs")
@@ -440,6 +438,42 @@ def parse_snapshot(document: Mapping[str, Any], *, conversation_id: str) -> dict
         validate_identifier(str(cursor), "last_event_id")
     result["last_event_id"] = cursor
     return result
+
+
+def _parse_pending_approval(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {
+        "approval_id",
+        "state",
+        "tool_call_id",
+        "tool_name",
+        "expires_at",
+    }:
+        _invalid("pending approval shape")
+    approval_id = _id(value, "approval_id")
+    tool_call_id = _id(value, "tool_call_id")
+    state = value.get("state")
+    if state not in {"pending", "resolving"}:
+        _invalid("pending approval state")
+    tool_name = value.get("tool_name")
+    if not isinstance(tool_name, str) or not tool_name or len(tool_name) > 128:
+        _invalid("pending approval tool name")
+    safe_tool_name = _safe(tool_name)
+    if not isinstance(safe_tool_name, str):
+        _invalid("pending approval tool name")
+    expires_at = value.get("expires_at")
+    if (
+        not isinstance(expires_at, (int, float))
+        or isinstance(expires_at, bool)
+        or expires_at <= 0
+    ):
+        _invalid("pending approval expiry")
+    return {
+        "approval_id": approval_id,
+        "state": state,
+        "tool_call_id": tool_call_id,
+        "tool_name": safe_tool_name,
+        "expires_at": expires_at,
+    }
 
 
 def _safe(value: Any, depth: int = 0) -> Any:

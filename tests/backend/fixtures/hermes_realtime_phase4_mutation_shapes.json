@@ -1,7 +1,8 @@
 {
   "source_repository": "hermes-agent-realtime",
-  "source_commit": "351da78c98564002effa32d57f5c8fd2fedfa1e9",
-  "source_files": ["gateway/realtime/api.py", "gateway/realtime/contracts.py", "gateway/worker_jobs/runtime.py", "gateway/worker_jobs/store.py"],
+  "source_commit": "810ac2b946aeaddffa2a5d7e91035ec8505c9ec4",
+  "phase4_2_status": "locked",
+  "source_files": ["gateway/platforms/api_server.py", "gateway/realtime/api.py", "gateway/realtime/contracts.py", "gateway/realtime/http.py", "gateway/realtime/session_manager.py", "gateway/realtime/state.py", "gateway/worker_jobs/runtime.py", "gateway/worker_jobs/store.py"],
   "contract_version": "1.0",
   "mutations": {
     "create": {
@@ -36,6 +37,10 @@
     "worker_command": {
       "keys": ["command_id", "worker_job_id", "acknowledgement", "revision", "operation", "control_signal_sent"],
       "types": {"command_id": "string", "worker_job_id": "string", "acknowledgement": "string", "revision": "integer", "operation": "string", "control_signal_sent": "boolean"}
+    },
+    "pending_approval_snapshot": {
+      "keys": ["approval_id", "state", "tool_call_id", "tool_name", "expires_at"],
+      "types": {"approval_id": "string", "state": "string", "tool_call_id": "string", "tool_name": "string", "expires_at": "number"}
     },
     "interrupt": {
       "keys": ["client_request_id", "realtime_session_id", "interrupted", "state"],

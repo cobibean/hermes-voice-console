@@ -147,6 +147,14 @@ class HermesRealtimeClient:
             params={"after": str(after)},
         )
 
+    async def worker_command_result(
+        self, conversation_id: str, worker_job_id: str, command_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"{_worker_base(conversation_id)}/{_segment(worker_job_id)}/commands/{_segment(command_id)}",
+        )
+
     async def worker_command(
         self,
         conversation_id: str,
@@ -235,6 +243,7 @@ def _public_upstream_error(document: Mapping[str, Any], status: int) -> tuple[st
         "idempotency_conflict": ("idempotency_conflict", "The request ID was already used for different input"),
         "worker_job_conflict": ("worker_job_conflict", "The worker job revision changed"),
         "worker_job_not_found": ("resource_not_found", "The requested resource was not found"),
+        "worker_command_not_found": ("resource_not_found", "The requested resource was not found"),
         "session_not_found": ("resource_not_found", "The requested resource was not found"),
         "stale_generation": ("stale_generation", "The Realtime session generation is stale"),
         "invalid_generation": ("invalid_request", "The Realtime session generation is invalid"),

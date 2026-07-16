@@ -211,6 +211,25 @@ def create_realtime_router(service: RealtimeProxyService, auth: AuthGate) -> API
             )
         )
 
+    @router.get(worker_base + "/{worker_job_id}/commands/{command_id}")
+    async def worker_command_result(
+        conversation_id: str,
+        worker_job_id: str,
+        command_id: str,
+        target: str,
+        request: Request,
+    ):
+        auth_context = context(request)
+        return await _respond(
+            lambda: service.worker_command_result(
+                conversation_id,
+                worker_job_id,
+                command_id,
+                target_name=target,
+                auth_context=auth_context,
+            )
+        )
+
     for operation in ("refine", "redirect", "cancel"):
         router.add_api_route(
             worker_base + f"/{{worker_job_id}}/{operation}",

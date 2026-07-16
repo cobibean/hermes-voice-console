@@ -35,6 +35,7 @@ REQUIRED_ENDPOINTS = {
     "/v1/realtime/conversations/{conversation_id}/worker-jobs": "GET",
     "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}": "GET",
     "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/events": "GET",
+    "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/commands/{command_id}": "GET",
     "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/refine": "POST",
     "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/redirect": "POST",
     "/v1/realtime/conversations/{conversation_id}/worker-jobs/{worker_job_id}/cancel": "POST",
@@ -173,15 +174,19 @@ def check_realtime_compatibility(capabilities: Mapping[str, Any]) -> RealtimeCom
         or workers.get("optimistic_revision") is not True
         or not isinstance(commands, list)
         or not {"refine", "redirect", "cancel"}.issubset(commands)
+        or workers.get("command_result_lookup") is not True
         or not isinstance(delivery, Mapping)
         or delivery.get("realtime_projection") != "exactly_once_durable_inbox"
     ):
         reasons.append("durable conversation-owned worker controls are missing")
     approvals = raw.get("approvals")
+    pending_fields = approvals.get("pending_snapshot_fields") if isinstance(approvals, Mapping) else None
     if (
         not isinstance(approvals, Mapping)
         or approvals.get("server_authoritative") is not True
         or not {"once", "deny"}.issubset(set(approvals.get("choices") or []))
+        or pending_fields
+        != ["approval_id", "state", "tool_call_id", "tool_name", "expires_at"]
     ):
         reasons.append("server-authoritative approvals are missing")
     routing = raw.get("routing_policy")
@@ -227,8 +232,8 @@ def _safe_contract(raw: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "events": ("replay", "durable", "cursor", "gap_error"),
         "tools": ("execution", "direct_allowlist", "delegation_tool", "raw_delegate_task_exposed"),
-        "workers": ("lead_model", "max_concurrency", "max_fanout", "queue", "commands", "ownership", "optimistic_revision", "delivery"),
-        "approvals": ("server_authoritative", "choices"),
+        "workers": ("lead_model", "max_concurrency", "max_fanout", "queue", "commands", "command_result_lookup", "ownership", "optimistic_revision", "delivery"),
+        "approvals": ("server_authoritative", "choices", "pending_snapshot_fields"),
         "routing_policy": ("persona_model", "substantial_work", "default_fanout", "confirmation"),
         "retention": ("event_count", "event_bytes", "context_bytes", "completed_item_days"),
         "timeouts": ("provider_request_seconds", "controller_ready_seconds", "tool_seconds", "worker_seconds", "approval_seconds"),

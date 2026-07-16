@@ -31,6 +31,7 @@ session creation, where it is a JSON field.
 | `GET` | `/api/realtime/conversations/{conversation_id}/worker-jobs` | `target` |
 | `GET` | `/api/realtime/conversations/{conversation_id}/worker-jobs/{job_id}` | `target` |
 | `GET` | `/api/realtime/conversations/{conversation_id}/worker-jobs/{job_id}/events` | `target`, integer `after` |
+| `GET` | `/api/realtime/conversations/{conversation_id}/worker-jobs/{job_id}/commands/{command_id}` | `target` |
 | `POST` | `/api/realtime/conversations/{conversation_id}/worker-jobs/{job_id}/{refine\|redirect\|cancel}` | `target`; `{command_id, expected_revision, payload}` |
 
 The create response contains `answer_sdp`, opaque `realtime_session_id`,
@@ -70,3 +71,5 @@ Worker command acknowledgements preserve Hermes' authoritative shape:
 `{command_id, worker_job_id, acknowledgement, revision, operation, control_signal_sent}`. Rejected
 or stale commands are normal typed acknowledgements, not fabricated HTTP conflicts; duplicate
 applied commands return `acknowledgement: "already_applied"`.
+Ambiguous command transport failures are reconciled through the durable command-result route; the
+proxy never retries the command or depends on an ephemeral job snapshot.
