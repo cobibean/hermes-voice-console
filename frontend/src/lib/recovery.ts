@@ -1,6 +1,9 @@
 const RECOVERY_KEY = 'hvc.recovery.v1';
 const RECOVERY_TTL_MS = 2 * 60 * 60 * 1000;
 const RECOVERY_IDENTIFIER_MAX = 128;
+const RECOVERY_KEYS = [
+  'version', 'target', 'conversationId', 'runId', 'lastSequence', 'savedAt', 'expiresAt',
+] as const;
 
 function isBoundedIdentifier(value: unknown): value is string {
   return typeof value === 'string'
@@ -24,8 +27,11 @@ export function loadRecovery(): RecoveryMetadata | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<RecoveryMetadata>;
+    const keys = Object.keys(value).sort();
     if (
-      value.version !== 1
+      keys.length !== RECOVERY_KEYS.length
+      || !RECOVERY_KEYS.every((key) => keys.includes(key))
+      || value.version !== 1
       || !isBoundedIdentifier(value.target)
       || !isBoundedIdentifier(value.conversationId)
       || !isBoundedIdentifier(value.runId)
@@ -61,8 +67,11 @@ export function saveRecovery(
   }
   const savedAt = Date.now();
   const metadata: RecoveryMetadata = {
-    ...value,
     version: 1,
+    target: value.target,
+    conversationId: value.conversationId,
+    runId: value.runId,
+    lastSequence: value.lastSequence,
     savedAt,
     expiresAt: savedAt + RECOVERY_TTL_MS,
   };

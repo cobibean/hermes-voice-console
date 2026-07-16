@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -98,6 +99,11 @@ def test_phase8_asset_gate_detects_browser_secret_and_source_map(tmp_path: Path)
 
     (dist / "app.js").write_text("const leaked = 'sk-proj-" + "x" * 24 + "';")
     (dist / "app.js.map").write_text("{}")
+    (source / "unsafe.ts").write_text(
+        "window['sessionStorage']['setItem']('unapproved', 'secret');\n"
+        "const store = window.localStorage; store[method]('x', 'y');\n"
+        "indexedDB.open('private'); document.cookie = 'private=1'; caches.open('private');\n"
+    )
     failed = subprocess.run(
         [sys.executable, str(script), "--root", str(tmp_path), "--json"],
         check=False,
@@ -107,3 +113,48 @@ def test_phase8_asset_gate_detects_browser_secret_and_source_map(tmp_path: Path)
     assert failed.returncode == 1
     assert "OpenAI-style secret" in failed.stdout
     assert "source maps are present" in failed.stdout
+    assert "unapproved browser storage keys" in failed.stdout
+    assert "aliased or computed browser storage write" in failed.stdout
+    assert "IndexedDB write" in failed.stdout
+    assert "cookie write" in failed.stdout
+    assert "Cache API write" in failed.stdout
+
+
+def test_phase8_upgrade_gate_rejects_empty_pinned_contract(tmp_path: Path) -> None:
+    repo = tmp_path / "hermes"
+    (repo / "gateway" / "realtime").mkdir(parents=True)
+    for name in ("contracts.py", "api.py", "http.py"):
+        (repo / "gateway" / "realtime" / name).write_text("")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "gate@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Gate Test"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "empty contract"], check=True)
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "schema_version: 1\nstatus: test\nenabled: false\n"
+        "contract:\n  name: hermes.realtime\n  required_major: 1\n"
+        "models:\n  realtime: gpt-realtime-2.1\n  lead_worker: gpt-5.6-sol\n"
+        f"hermes:\n  minimum_tested_commit: {commit}\n  production_pinned_commit: {commit}\n"
+    )
+    script = Path(__file__).resolve().parents[2] / "scripts" / "realtime_upgrade_gate.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--manifest", str(manifest), "--hermes-repo", str(repo), "--json"],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 1
+    document = json.loads(result.stdout)
+    pinned = next(row for row in document["rows"] if row["lane"] == "production_pinned")
+    assert pinned["passed"] is False
+    assert any("major" in reason or "methods" in reason for reason in pinned["static_failures"])
+    model = next(row for row in document["rows"] if row["lane"] == "model_unavailable")
+    assert model == {
+        "lane": "model_unavailable",
+        "expected": "preflight_blocked",
+        "observed": "not_validated",
+        "passed": False,
+    }

@@ -11,7 +11,7 @@ Pinned and minimum tested Hermes commit: `d41e793a355ae1bb9dc2c974d1fd2edc8b6c6a
 
 ## Gate result
 
-The deterministic Phase 8 gate is green. Realtime remains disabled, no target was deployed, and no production configuration was changed.
+The implemented automated Phase 8 gate is green for the pinned capability, proxy, storage, upgrade-blocking, and browser recovery cases listed below. Phase 8 as a whole remains pending the explicit live/browser race cases under "External and human gates not claimed here." Realtime remains disabled, no target was deployed, and no production configuration was changed.
 
 The console fails before media startup when the target omits the Realtime contract, advertises the wrong contract major, lacks a required endpoint or feature, uses browser rather than server authority, or does not advertise `gpt-realtime-2.1`. The production pin passes the source and focused runtime suites. The local `main`/`origin/main` reference at `0c1adb4877f344af8276d5277871e8056cef3ad5` has no Realtime contract and is correctly classified as unsupported rather than silently accepted.
 
@@ -21,8 +21,8 @@ No unresolved high-risk security finding was found. One medium browser-recovery 
 
 | Lane | Expected result | Evidence | Result |
 | --- | --- | --- | --- |
-| Minimum supported | Compatible | `d41e793`; contract/API source present; 92 focused Realtime tests | Pass |
-| Production pin | Compatible | Active Hermes checkout exactly `d41e793`; focused and non-voice regression suites | Pass |
+| Minimum supported | Compatible | Same exact commit as pin; parsed 1.x contract/API/HTTP surface, runtime capability probe, 92 focused Realtime tests | Pass |
+| Production pin | Compatible | Active Hermes checkout exactly `d41e793`; parsed contract, runtime capability preflight, focused and non-voice regression suites | Pass |
 | Current main, non-production | Compatible or blocked before startup | Local tracking ref `0c1adb4` lacks `gateway/realtime/contracts.py` | Pass: blocked |
 | Realtime disabled | Legacy-only behavior | Manifest remains `enabled: false`; disabled-target backend test | Pass |
 | Model unavailable | Block before media startup | Contract matrix removes model/provider advertisement | Pass: blocked |
@@ -33,7 +33,7 @@ Run the compatibility check with:
 HERMES_REALTIME_REPO=/absolute/path/to/hermes-agent-realtime make realtime-upgrade-gate
 ```
 
-The script is deliberately read-only. It checks exact commits and expected source contracts without switching a running Hermes checkout or touching an active agent.
+The script is deliberately read-only. It parses the exact pinned contract, API methods, and HTTP surface; obtains capabilities from the checked-out runtime; runs the Voice Console compatibility parser including a model-unavailable negative probe; and executes the 92-test Hermes Realtime suite. A different minimum commit or newly capable `main` fails until it is validated in its own disposable checkout. The command never switches a running Hermes checkout or touches an active agent.
 
 ## Automated recovery matrix
 
@@ -47,12 +47,13 @@ The script is deliberately read-only. It checks exact commits and expected sourc
 | Control reconnect and cursor resume | `realtimeControlClient.test.ts`: snapshot-before-replay, reconnect from cursor, failed-socket fencing; backend replay-gap snapshot test |
 | Duplicate/out-of-order events | `conversationProjection.test.ts` event-ID dedupe; Hermes durable event and transcript projection tests |
 | Duplicate function calls and client mutations | Hermes provider-call ledger test; console atomic request claims, cached delete/approval/worker-command tests |
-| Browser close during worker/approval/completion | snapshot restoration and no-redispatch projection tests; Playwright close/reload recovery scenarios; Hermes durable completion projection |
+| Browser close during legacy conversation/run | Playwright close/reload and pre-run-ID recovery scenarios |
+| Browser close during active Realtime worker, pending approval, or undelivered completion | Durable snapshot/no-redispatch and completion-projection layers are covered; exact browser-level timing cases remain pending and are not claimed as closed |
 | Voice Console restart | content-free SQLite mapping/request ledger reopen and worker-command lookup restart tests |
 | Realtime rotation while worker runs | Hermes automatic result route to replacement-call tests |
 | Hermes restart | durable event, request, approval, and worker state tests; running attempts become explicit `outcome_unknown` rather than being resumed blindly |
 | Approval expiry/double/wrong owner | Hermes expiry and concurrent duplicate approval tests; console owner isolation and latched submission tests |
-| Refinement/cancel/completion races | revisioned worker command and terminal/stale rejection tests |
+| Refinement/cancel/completion races | Revisioned worker command and terminal/stale rejection primitives pass; exact reversible/irreversible/approval-wait/cancellation/completion browser timing matrix remains pending |
 | Cancel speech vs cancel worker | console interrupt test proves worker remains running; worker cancel uses a separate command path |
 | One-worker default/fan-out | contract requires default fan-out 1, max concurrency 1, max fan-out 1, FIFO per conversation |
 | Legacy and non-voice regression | Voice Console legacy fake E2E/Playwright suite; 356 representative Hermes gateway tests passed, 21 environment-gated skips |
@@ -60,7 +61,7 @@ The script is deliberately read-only. It checks exact commits and expected sourc
 
 ## Security evidence
 
-`scripts/realtime_security_gate.py` scans production browser assets and non-test browser source after the frontend build. It fails on provider credential markers, OpenAI-style secrets, source maps, dynamic storage keys, unapproved storage keys, or content fields in recovery persistence. The verified build scanned 45 files / 633,134 bytes. The only application storage write was `hvc.recovery.v1`; its schema contains identifiers, a cursor, and timestamps only.
+`scripts/realtime_security_gate.py` is a defense-in-depth heuristic over production browser assets and non-test browser source after the frontend build. It fails on provider credential markers, OpenAI-style secrets, source maps, dynamic/aliased/unapproved Web Storage writes, direct IndexedDB/cookie/Cache API writes in application source, or content fields in recovery persistence. The only approved application storage write is `hvc.recovery.v1`; save constructs its seven fields explicitly and load rejects non-exact key sets. Hostile tests inject transcript, response, tool arguments, API-key, token, and Authorization extras into both save and stored JSON.
 
 Additional authoritative-boundary proof:
 
@@ -73,8 +74,8 @@ Additional authoritative-boundary proof:
 
 ## Verification commands and results
 
-- Voice Console focused Phase 8 backend tests: 5 passed.
-- Voice Console frontend suite after recovery hardening: 17 files / 93 tests passed.
+- Voice Console focused Phase 8 backend tests: 6 passed, including hostile browser-asset and empty-contract upgrade lanes.
+- Voice Console frontend suite: 17 files / 94 tests passed, including exact recovery-key allowlisting and hostile extra-field persistence cases.
 - Hermes focused `tests/gateway/realtime`: 92 passed.
 - Hermes representative API Server/platform/profile/Telegram/Discord/voice regression: 356 passed, 21 skipped because those cases are explicitly environment-gated.
 - Browser artifact security gate: passed.
@@ -82,12 +83,16 @@ Additional authoritative-boundary proof:
 - Full `make check`: passed (backend, lint, 17 frontend files / 93 tests, production build, browser security audit, and fake E2E).
 - Full `make browser-check`: 8 Playwright scenarios passed against the polished desktop/compact/mobile UI. Screenshot evidence is stored under `docs/visual-qa/` by the visual acceptance slice.
 
+One transient manual-discard transport failure was triaged as a possible race instead of being ignored. The exact backend discard/restart case passed 20 consecutive runs, and all four frontend discard/reconnect cases passed 20 consecutive runs (80 assertions across those repeated files). No deterministic failure reproduced, so no timing workaround was added; the staging telemetry gate must still watch for a real 502 recurrence.
+
 ## External and human gates not claimed here
 
 These checks require the later staging/acceptance phase and are not replaced by deterministic tests:
 
 - A real invalid/expired OpenAI Realtime credential, actual provider rate limit, and account-level model-access denial.
 - Provider-side partial acceptance or regional network faults against a real call.
+- Browser close/reopen at the exact instants an active Realtime worker is running, an approval is pending, and a completion is durable but not yet delivered.
+- Spoken refinement at the exact reversible, irreversible, approval-wait, cancellation, and completion-race boundaries.
 - Desktop and phone Human Gate B, including interruption feel, rotation/background behavior, visual quality, and owner approval.
 - A freshly fetched future upstream `main`; this gate records the local tracking ref and must be rerun after any fetch/update.
 - Production deployment, target enablement, rollback rehearsal, and live telemetry.

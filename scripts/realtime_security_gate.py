@@ -27,6 +27,16 @@ STRING_CONSTANT = re.compile(
     r"\bconst\s+(?P<symbol>[A-Za-z_$][\w$]*)\s*=\s*"
     r"(?P<quote>['\"])(?P<value>[^'\"]+)(?P=quote)\s*;"
 )
+BRACKET_PROPERTY = re.compile(r"\[['\"](?P<name>[A-Za-z_$][\w$]*)['\"]\]")
+STORAGE_ALIAS = re.compile(
+    r"\b(?:const|let|var)\s+(?P<alias>[A-Za-z_$][\w$]*)\s*=\s*"
+    r"(?:window\.)?(?:localStorage|sessionStorage)\b"
+)
+FORBIDDEN_PERSISTENCE = {
+    "IndexedDB write": re.compile(r"\bindexedDB\s*(?:\.|\[)\s*(?:open|deleteDatabase)\b"),
+    "cookie write": re.compile(r"\bdocument\s*\.\s*cookie\s*="),
+    "Cache API write": re.compile(r"\bcaches\s*\.\s*open\s*\("),
+}
 
 
 def audit(root: Path) -> dict[str, object]:
@@ -47,6 +57,7 @@ def audit(root: Path) -> dict[str, object]:
             failures.append("browser source maps are present: " + ", ".join(maps))
 
     storage_keys: set[str] = set()
+    persistence_surfaces: set[str] = set()
     scanned = 0
     for path in files:
         try:
@@ -62,16 +73,30 @@ def audit(root: Path) -> dict[str, object]:
         if re.search(r"sk-[A-Za-z0-9_-]{20,}", text):
             failures.append(f"OpenAI-style secret appears in {relative}")
         if path.is_relative_to(source_root):
+            normalized = BRACKET_PROPERTY.sub(lambda match: "." + match.group("name"), text)
             constants = {
                 match.group("symbol"): match.group("value")
-                for match in STRING_CONSTANT.finditer(text)
+                for match in STRING_CONSTANT.finditer(normalized)
             }
-            for match in STORAGE_WRITE.finditer(text):
+            for match in STORAGE_WRITE.finditer(normalized):
                 key = match.group("literal") or constants.get(match.group("symbol") or "")
                 if key is None:
                     failures.append(f"dynamic browser storage key appears in {relative}")
                 else:
                     storage_keys.add(key)
+                    persistence_surfaces.add("Web Storage")
+            for alias_match in STORAGE_ALIAS.finditer(normalized):
+                alias = alias_match.group("alias")
+                alias_write = re.compile(
+                    rf"\b{re.escape(alias)}\s*(?:\.\s*setItem\s*\(|\[)"
+                )
+                if alias_write.search(normalized):
+                    failures.append(f"aliased or computed browser storage write appears in {relative}")
+            if re.search(r"(?:localStorage|sessionStorage)\s*\[", normalized):
+                failures.append(f"computed browser storage access appears in {relative}")
+            for label, pattern in FORBIDDEN_PERSISTENCE.items():
+                if pattern.search(normalized):
+                    failures.append(f"{label} appears in application source {relative}")
 
     unknown = sorted(storage_keys - ALLOWED_STORAGE_KEYS)
     if unknown:
@@ -88,6 +113,7 @@ def audit(root: Path) -> dict[str, object]:
         "files_scanned": len(files),
         "bytes_scanned": scanned,
         "storage_keys": sorted(storage_keys),
+        "persistence_surfaces": sorted(persistence_surfaces),
         "failures": failures,
     }
 

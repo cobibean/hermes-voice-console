@@ -58,4 +58,33 @@ describe('run recovery metadata', () => {
       target: 'jobhunter', conversationId: 'hvc_1', runId: '../run', lastSequence: 0,
     })).toThrow('bounded identifiers');
   });
+
+  it('drops untyped extra fields on save and rejects extra fields loaded from storage', () => {
+    saveRecovery({
+      target: 'jobhunter', conversationId: 'hvc_1', runId: 'run_1', lastSequence: 0,
+      transcript: 'do not persist me',
+      toolArguments: { secret: true },
+      api_key: 'provider-secret',
+      token: 'browser-token',
+      Authorization: 'Bearer private',
+    } as never);
+    const saved = window.sessionStorage.getItem('hvc.recovery.v1') ?? '';
+    for (const forbidden of ['transcript', 'toolArguments', 'api_key', 'token', 'Authorization']) {
+      expect(saved).not.toContain(forbidden);
+    }
+    for (const extra of [
+      { response: 'private result' },
+      { rawTranscript: 'private transcript' },
+      { toolArguments: { command: 'private' } },
+      { api_key: 'private' },
+      { token: 'private' },
+      { Authorization: 'Bearer private' },
+    ]) {
+      window.sessionStorage.setItem('hvc.recovery.v1', JSON.stringify({
+        ...JSON.parse(saved), ...extra,
+      }));
+      expect(loadRecovery()).toBeNull();
+      expect(window.sessionStorage.getItem('hvc.recovery.v1')).toBeNull();
+    }
+  });
 });
