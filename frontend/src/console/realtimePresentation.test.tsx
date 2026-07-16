@@ -62,17 +62,15 @@ describe('realtime presentation components', () => {
   it('keeps mute, manual turns, barge-in, and end-call as distinct accessible actions', () => {
     const onMute = vi.fn();
     const onManual = vi.fn();
-    const onSend = vi.fn();
     const onInterrupt = vi.fn();
     const onEndCall = vi.fn();
     render(<RealtimeVoiceControls realtime={presentation({
       manualTurnTaking: true,
-      manualCaptureState: 'capturing',
+      manualCaptureState: 'idle',
       speaking: true,
       onToggleMute: onMute,
       onToggleManualTurnTaking: onManual,
-      onSendManualTurn: onSend,
-      onDiscardManualTurn: vi.fn(),
+      onStartManualTurn: vi.fn(),
       onInterrupt,
       onEndCall,
     })} />);
@@ -80,15 +78,13 @@ describe('realtime presentation components', () => {
     expect(mute).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(mute);
     fireEvent.click(screen.getByRole('button', { name: 'Switch to automatic turns' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Send recording' }));
     fireEvent.click(screen.getByRole('button', { name: 'Interrupt Hermes' }));
     fireEvent.click(screen.getByRole('button', { name: 'End call' }));
     expect(onMute).toHaveBeenCalledOnce();
     expect(onManual).toHaveBeenCalledOnce();
-    expect(onSend).toHaveBeenCalledOnce();
     expect(onInterrupt).toHaveBeenCalledOnce();
     expect(onEndCall).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText('Manual recording')).toHaveTextContent('Hermes will not receive this audio until you send it');
+    expect(screen.getByLabelText('Manual recording')).toHaveTextContent('Starting turns your mic on for this manual turn');
     screen.getAllByRole('button').forEach((button) => expect(button).toHaveClass('touch-target'));
   });
 
@@ -96,11 +92,13 @@ describe('realtime presentation components', () => {
     const onStart = vi.fn();
     const onSend = vi.fn();
     const onDiscard = vi.fn();
+    const onEndCall = vi.fn();
     const base = presentation({
       manualTurnTaking: true,
       onStartManualTurn: onStart,
       onSendManualTurn: onSend,
       onDiscardManualTurn: onDiscard,
+      onEndCall,
     });
     const manual = render(<RealtimeVoiceControls realtime={{ ...base, manualCaptureState: 'idle' }} />);
     const user = userEvent.setup();
@@ -113,6 +111,9 @@ describe('realtime presentation components', () => {
     manual.rerender(<RealtimeVoiceControls realtime={{ ...base, manualCaptureState: 'starting' }} />);
     expect(within(manual.container).getByRole('button', { name: 'Starting recording…' })).toBeDisabled();
     expect(within(manual.container).getByRole('button', { name: 'Starting recording…' })).toHaveAttribute('aria-busy', 'true');
+    expect(within(manual.container).getByRole('button', { name: 'Mute mic' })).toBeDisabled();
+    expect(within(manual.container).getByRole('button', { name: 'Mute mic' })).toHaveAttribute('title', 'Finish or discard this recording first');
+    expect(within(manual.container).getByRole('button', { name: 'Switch to automatic turns' })).toBeDisabled();
 
     manual.rerender(<RealtimeVoiceControls realtime={{ ...base, manualCaptureState: 'capturing', listening: true }} />);
     fireEvent.click(within(manual.container).getByRole('button', { name: 'Send recording' }));
@@ -120,10 +121,19 @@ describe('realtime presentation components', () => {
     expect(onSend).toHaveBeenCalledOnce();
     expect(onDiscard).toHaveBeenCalledOnce();
     expect(within(manual.container).getByRole('status')).toHaveTextContent('Hermes will not receive this audio until you send it');
+    expect(within(manual.container).getByText(/Mute and mode switching stay locked until this recording is sent or discarded/)).toBeInTheDocument();
+    expect(within(manual.container).getByRole('button', { name: 'End call' })).toBeEnabled();
 
     manual.rerender(<RealtimeVoiceControls realtime={{ ...base, manualCaptureState: 'committing' }} />);
     expect(within(manual.container).getByRole('button', { name: 'Sending recording…' })).toBeDisabled();
     expect(within(manual.container).getByRole('button', { name: 'Discard recording' })).toBeDisabled();
+
+    manual.rerender(<RealtimeVoiceControls realtime={{ ...base, manualCaptureState: 'discarding' }} />);
+    expect(within(manual.container).getByRole('button', { name: 'Send recording' })).toBeDisabled();
+    expect(within(manual.container).getByRole('button', { name: 'Discarding recording…' })).toBeDisabled();
+    expect(within(manual.container).getByRole('button', { name: 'Discarding recording…' })).toHaveAttribute('aria-busy', 'true');
+    expect(within(manual.container).getByRole('status')).toHaveTextContent('Waiting for Hermes to confirm it is cleared');
+    expect(within(manual.container).getByRole('button', { name: 'End call' })).toBeEnabled();
   });
 
   it('truthfully disables manual recording before authoritative readiness and exposes errors', () => {

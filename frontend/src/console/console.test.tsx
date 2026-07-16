@@ -192,6 +192,7 @@ describe('console architecture seams', () => {
       onDiscardManualTurn: onDiscard,
     };
     const capturing = { ...idle, manualCaptureState: 'capturing' as const, listening: true };
+    const discarding = { ...idle, manualCaptureState: 'discarding' as const };
     const automatic = { ...idle, manualTurnTaking: false };
 
     const desktop = render(<DesktopConsole controller={controller} realtime={idle} />);
@@ -199,6 +200,8 @@ describe('console architecture seams', () => {
     desktop.rerender(<DesktopConsole controller={controller} realtime={capturing} />);
     fireEvent.click(within(desktop.container).getByRole('button', { name: 'Send recording' }));
     fireEvent.click(within(desktop.container).getByRole('button', { name: 'Discard recording' }));
+    desktop.rerender(<DesktopConsole controller={controller} realtime={discarding} />);
+    expect(within(desktop.container).getByRole('button', { name: 'Discarding recording…' })).toBeDisabled();
     desktop.rerender(<DesktopConsole controller={controller} realtime={automatic} />);
     expect(within(desktop.container).queryByLabelText('Manual recording')).not.toBeInTheDocument();
     desktop.unmount();
@@ -212,6 +215,10 @@ describe('console architecture seams', () => {
     expect(discard).toHaveClass('touch-target');
     fireEvent.click(send);
     fireEvent.click(discard);
+    mobile.rerender(<MobileConsole controller={controller} realtime={discarding} />);
+    const discardingButton = within(mobile.container).getByRole('button', { name: 'Discarding recording…' });
+    expect(discardingButton).toBeDisabled();
+    expect(discardingButton).toHaveClass('touch-target');
     mobile.rerender(<MobileConsole controller={controller} realtime={automatic} />);
     expect(within(mobile.container).queryByLabelText('Manual recording')).not.toBeInTheDocument();
 

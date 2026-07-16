@@ -56,13 +56,16 @@ export function RealtimeVoiceControls({ realtime }: { realtime?: RealtimePresent
   const manualState = realtime.manualCaptureState ?? 'idle';
   const manualReady = realtime.readiness === 'live';
   const canStartManual = manualReady && Boolean(realtime.onStartManualTurn);
+  const manualOperationActive = ['starting', 'capturing', 'committing', 'discarding'].includes(manualState);
+  const finishManualTitle = manualOperationActive ? 'Finish or discard this recording first' : undefined;
   const manualCopy = {
     error: realtime.manualCaptureError ?? 'Manual recording could not start. Try again when audio and Hermes control are ready.',
     idle: canStartManual
-      ? 'Manual turns record only after Start recording. Send or discard when finished.'
+      ? 'Manual turns record only after Start recording. Starting turns your mic on for this manual turn; send or discard when finished.'
       : 'Manual recording is unavailable until audio and Hermes control are ready.',
     capturing: 'Recording manually. Hermes will not receive this audio until you send it.',
     committing: 'Sending the recording to Hermes.',
+    discarding: 'Discarding the recording. Waiting for Hermes to confirm it is cleared.',
     starting: 'Starting the microphone for a manual turn.',
   }[manualState];
   return (
@@ -72,7 +75,8 @@ export function RealtimeVoiceControls({ realtime }: { realtime?: RealtimePresent
         className={`${realtime.muted ? '' : 'secondary'} touch-target`}
         aria-pressed={realtime.muted}
         onClick={realtime.onToggleMute}
-        disabled={!realtime.onToggleMute}
+        disabled={manualOperationActive || !realtime.onToggleMute}
+        title={finishManualTitle}
       >
         {realtime.muted ? 'Unmute mic' : 'Mute mic'}
       </button>
@@ -81,7 +85,8 @@ export function RealtimeVoiceControls({ realtime }: { realtime?: RealtimePresent
         className="secondary touch-target"
         aria-pressed={realtime.manualTurnTaking}
         onClick={realtime.onToggleManualTurnTaking}
-        disabled={!realtime.onToggleManualTurnTaking}
+        disabled={manualOperationActive || !realtime.onToggleManualTurnTaking}
+        title={finishManualTitle}
       >
         {realtime.manualTurnTaking ? 'Switch to automatic turns' : 'Switch to manual turns'}
       </button>
@@ -100,13 +105,13 @@ export function RealtimeVoiceControls({ realtime }: { realtime?: RealtimePresent
           {manualState === 'starting' ? (
             <button type="button" className="secondary touch-target" disabled aria-busy="true">Starting recording…</button>
           ) : null}
-          {manualState === 'capturing' || manualState === 'committing' ? (
+          {manualState === 'capturing' || manualState === 'committing' || manualState === 'discarding' ? (
             <>
               <button
                 type="button"
                 className="secondary touch-target"
                 onClick={realtime.onSendManualTurn}
-                disabled={manualState === 'committing' || !realtime.onSendManualTurn}
+                disabled={manualState !== 'capturing' || !realtime.onSendManualTurn}
                 aria-busy={manualState === 'committing'}
               >
                 {manualState === 'committing' ? 'Sending recording…' : 'Send recording'}
@@ -115,9 +120,10 @@ export function RealtimeVoiceControls({ realtime }: { realtime?: RealtimePresent
                 type="button"
                 className="secondary touch-target"
                 onClick={realtime.onDiscardManualTurn}
-                disabled={manualState === 'committing' || !realtime.onDiscardManualTurn}
+                disabled={manualState !== 'capturing' || !realtime.onDiscardManualTurn}
+                aria-busy={manualState === 'discarding'}
               >
-                Discard recording
+                {manualState === 'discarding' ? 'Discarding recording…' : 'Discard recording'}
               </button>
             </>
           ) : null}
@@ -143,7 +149,9 @@ export function RealtimeVoiceControls({ realtime }: { realtime?: RealtimePresent
         End call
       </button>
       <p>{realtime.manualTurnTaking
-        ? 'Interrupting Hermes speech keeps delegated work running.'
+        ? (manualOperationActive
+          ? 'Mute and mode switching stay locked until this recording is sent or discarded. You can still end the call.'
+          : 'Interrupting Hermes speech keeps delegated work running.')
         : 'Automatic turns respond when you pause. Interrupting speech keeps delegated work running.'}</p>
     </section>
   );

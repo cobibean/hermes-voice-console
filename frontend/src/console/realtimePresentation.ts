@@ -53,7 +53,7 @@ export interface RealtimePresentationModel {
   canReconnect: boolean;
   muted: boolean;
   manualTurnTaking: boolean;
-  manualCaptureState?: 'idle' | 'starting' | 'capturing' | 'committing' | 'error';
+  manualCaptureState?: 'idle' | 'starting' | 'capturing' | 'committing' | 'discarding' | 'error';
   manualCaptureError?: string;
   listening: boolean;
   speaking: boolean;
