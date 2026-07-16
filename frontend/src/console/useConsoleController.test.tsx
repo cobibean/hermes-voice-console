@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   realtime: {
     state: 'disabled', stateDetail: undefined, compatibility: null, mediaState: 'idle', controlState: 'idle',
     projection: null as unknown, connected: false, muted: false, manualTurnTaking: false, manualControlsAvailable: false,
+    manualCaptureState: 'idle', manualCaptureError: undefined,
     connect: vi.fn(), close: vi.fn(), setMuted: vi.fn(), setManualTurnTaking: vi.fn(),
     startManualTurn: vi.fn(), stopManualTurn: vi.fn(), discardManualTurn: vi.fn(), commitManualTurn: vi.fn(), sendInput: vi.fn(), interruptSpeech: vi.fn(),
     resolveApproval: vi.fn(), submittingApprovalId: null, workerCommand: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('../lib/api', () => ({
   loadSessionMessages: (...args: unknown[]) => mocks.loadMessages(...args),
 }));
 vi.mock('./useLegacyVoiceSession', () => ({ useLegacyVoiceSession: () => mocks.legacy }));
-vi.mock('./useRealtimeSession', () => ({ useRealtimeSession: () => mocks.realtime }));
+vi.mock('./useRealtimeSession', () => ({ useRealtimeSession: () => ({ ...mocks.realtime }) }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -49,6 +50,8 @@ describe('useConsoleController conversation identity', () => {
     mocks.realtime.connected = false;
     mocks.realtime.manualControlsAvailable = false;
     mocks.realtime.manualTurnTaking = false;
+    mocks.realtime.manualCaptureState = 'idle';
+    mocks.realtime.manualCaptureError = undefined;
     mocks.realtime.setManualTurnTaking.mockResolvedValue(undefined);
     mocks.realtime.commitManualTurn.mockResolvedValue(undefined);
   });
@@ -89,24 +92,36 @@ describe('useConsoleController conversation identity', () => {
     mocks.realtime.connected = true;
     mocks.realtime.manualControlsAvailable = true;
     mocks.realtime.manualTurnTaking = true;
+    mocks.realtime.manualCaptureState = 'capturing';
     const bootstrap = {
       server: { public_base_url: 'http://localhost:3000', auth_mode: 'development' as const },
       principal: { kind: 'development', owner_key: 'owner' },
       voice: { stt_provider: 'fake', tts_provider: 'fake', sample_rate: 16000, max_recording_seconds: 120, speak_replies_default: false },
       targets: [{ name: 'fake', label: 'Fake', preferred_transport: 'runs', api_key_configured: true, realtime_enabled: true }],
     };
-    const { result } = renderHook(() => useConsoleController({
+    const { result, rerender } = renderHook(() => useConsoleController({
       authMode: 'development', getToken, bootstrap,
     }));
     await waitFor(() => expect(result.current.sessionKey).toBe('hvc_a'));
     expect(result.current.realtime.onToggleManualTurnTaking).toBeDefined();
+    expect(result.current.realtime.onStartManualTurn).toBeUndefined();
     expect(result.current.realtime.onSendManualTurn).toBeDefined();
+    expect(result.current.realtime.onDiscardManualTurn).toBeDefined();
 
     act(() => result.current.realtime.onToggleManualTurnTaking?.());
     expect(mocks.realtime.setManualTurnTaking).toHaveBeenCalledWith(false);
     act(() => result.current.realtime.onSendManualTurn?.());
     expect(mocks.realtime.stopManualTurn).toHaveBeenCalledOnce();
     expect(mocks.realtime.commitManualTurn).toHaveBeenCalledOnce();
+    act(() => result.current.realtime.onDiscardManualTurn?.());
+    expect(mocks.realtime.discardManualTurn).toHaveBeenCalledOnce();
+
+    mocks.realtime.manualCaptureState = 'idle';
+    rerender();
+    expect(result.current.realtime.onStartManualTurn).toBeDefined();
+    expect(result.current.realtime.onSendManualTurn).toBeUndefined();
+    act(() => result.current.realtime.onStartManualTurn?.());
+    expect(mocks.realtime.startManualTurn).toHaveBeenCalledOnce();
     act(() => result.current.realtime.onUseLegacy?.());
     expect(mocks.realtime.close).toHaveBeenCalledOnce();
     expect(result.current.transport).toBe('legacy');

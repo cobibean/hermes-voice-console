@@ -589,6 +589,8 @@ export function useConsoleController({
     canReconnect: transport === 'realtime' && ['disconnected', 'failed', 'degraded'].includes(realtimeSession.state),
     muted: realtimeSession.muted,
     manualTurnTaking: realtimeSession.manualTurnTaking,
+    manualCaptureState: realtimeSession.manualCaptureState,
+    manualCaptureError: realtimeSession.manualCaptureError,
     listening: transport === 'realtime' && realtimeSession.projection.listening,
     speaking: transport === 'realtime' && realtimeSession.projection.speaking,
     jobs: presentRealtimeJobs(realtimeSession, artifactAllowedOrigins),
@@ -600,10 +602,23 @@ export function useConsoleController({
           .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
       }
       : undefined,
+    onStartManualTurn: transport === 'realtime'
+      && realtimeSession.manualControlsAvailable
+      && realtimeSession.manualTurnTaking
+      && ['idle', 'error'].includes(realtimeSession.manualCaptureState)
+      ? realtimeSession.startManualTurn
+      : undefined,
     onSendManualTurn: transport === 'realtime'
       && realtimeSession.manualControlsAvailable
       && realtimeSession.manualTurnTaking
+      && realtimeSession.manualCaptureState === 'capturing'
       ? sendManualTurn
+      : undefined,
+    onDiscardManualTurn: transport === 'realtime'
+      && realtimeSession.manualControlsAvailable
+      && realtimeSession.manualTurnTaking
+      && realtimeSession.manualCaptureState === 'capturing'
+      ? realtimeSession.discardManualTurn
       : undefined,
     onInterrupt: transport === 'realtime' ? cancelSpeech : undefined,
     onEndCall: transport === 'realtime' ? realtimeSession.close : undefined,

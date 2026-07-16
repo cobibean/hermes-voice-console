@@ -4,29 +4,33 @@ import { supportsManualTurnControls, useRealtimeSession } from './useRealtimeSes
 
 const mocks = vi.hoisted(() => ({
   approval: vi.fn(),
+  compatibility: vi.fn(),
+  createSession: vi.fn(),
   manualCommit: vi.fn(),
   turnMode: vi.fn(),
-  media: [] as Array<{ setMuted: ReturnType<typeof vi.fn> }>,
+  media: [] as Array<{ setMuted: ReturnType<typeof vi.fn>; options: Record<string, any> }>,
   controls: [] as Array<{ options: Record<string, any>; isReady: boolean }>,
 }));
 
 vi.mock('../lib/api', () => ({
-  loadRealtimeCompatibility: vi.fn(async () => ({
-    compatible: true, version: '1.0', reasons: [],
-    contract: { sessions: { manual_audio_commit: true, turn_mode_update: true, turn_modes: ['server_vad', 'manual'] } },
-  })),
-  createRealtimeSession: vi.fn(), activateRealtimeSession: vi.fn(), closeRealtimeSession: vi.fn(async () => undefined),
+  loadRealtimeCompatibility: (...args: unknown[]) => mocks.compatibility(...args),
+  createRealtimeSession: (...args: unknown[]) => mocks.createSession(...args),
+  activateRealtimeSession: vi.fn(), closeRealtimeSession: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/realtimeClient', () => ({
   RealtimeClient: class {
-    activeSession = {
+    activeSession: Record<string, any> = {
       contract_version: '1.0', realtime_session_id: 'rt_1', conversation_id: 'hvc_1',
       session_generation: 1, state: 'active', answer_sdp: 'v=0', client_request_id: 'create_1',
     };
     isConnected = true;
     setMuted = vi.fn();
-    constructor(private options: { onState?: (state: string) => void }) { mocks.media.push(this); }
-    async connect() { this.options.onState?.('connected'); return this.activeSession; }
+    constructor(public options: Record<string, any>) { mocks.media.push(this); }
+    async connect() {
+      this.activeSession = await this.options.exchangeSdp('v=0');
+      this.options.onState?.('connected');
+      return this.activeSession;
+    }
     close() { return this.activeSession; }
   },
 }));
@@ -61,10 +65,22 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const getToken = async () => null;
+const supportedCompatibility = {
+  compatible: true, version: '1.0', reasons: [],
+  contract: { sessions: { manual_audio_commit: true, turn_mode_update: true, turn_modes: ['server_vad', 'manual'] } },
+};
 
 describe('useRealtimeSession approval and identity ownership', () => {
   beforeEach(() => {
     mocks.approval.mockReset();
+    mocks.compatibility.mockReset();
+    mocks.compatibility.mockResolvedValue(supportedCompatibility);
+    mocks.createSession.mockReset();
+    mocks.createSession.mockImplementation(async (input: Record<string, unknown>) => ({
+      contract_version: '1.0', realtime_session_id: `rt_${String(input.conversationId)}`,
+      conversation_id: input.conversationId, session_generation: 1, state: 'active',
+      answer_sdp: 'v=0', client_request_id: input.clientRequestId,
+    }));
     mocks.manualCommit.mockReset();
     mocks.turnMode.mockReset();
     mocks.controls.length = 0;
@@ -183,6 +199,14 @@ describe('useRealtimeSession approval and identity ownership', () => {
     expect(mocks.manualCommit).toHaveBeenCalledWith(expect.stringMatching(/^manual-commit-/), 1);
     commitAck.resolve({ state: 'accepted' });
     await act(async () => { await first; });
+    expect(result.current.manualCaptureState).toBe('idle');
+
+    mocks.manualCommit.mockResolvedValueOnce({ state: 'accepted' });
+    act(() => result.current.startManualTurn());
+    await act(async () => { await result.current.commitManualTurn(); });
+    expect(mocks.manualCommit).toHaveBeenCalledTimes(2);
+    expect(mocks.manualCommit.mock.calls[1][0]).not.toBe(mocks.manualCommit.mock.calls[0][0]);
+    expect(result.current.manualCaptureState).toBe('idle');
 
     const automaticAck = deferred<Record<string, unknown>>();
     mocks.turnMode.mockReturnValueOnce(automaticAck.promise);
@@ -214,6 +238,8 @@ describe('useRealtimeSession approval and identity ownership', () => {
     await expect(first).rejects.toThrow(message);
     expect(mocks.manualCommit).toHaveBeenCalledTimes(1);
     expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+    await waitFor(() => expect(result.current.manualCaptureState).toBe('error'));
+    expect(result.current.manualCaptureError).toContain(message === 'No audio was captured' ? 'No audio was captured' : 'not be retried');
   });
 
   it('fences a late manual acknowledgement after End Call', async () => {
@@ -270,6 +296,49 @@ describe('useRealtimeSession approval and identity ownership', () => {
     await expect(pending).rejects.toThrow('connection closed');
     expect(mocks.manualCommit).toHaveBeenCalledTimes(1);
     expect(mocks.media[0].setMuted).toHaveBeenLastCalledWith(true);
+  });
+
+  it('synchronously resets an old manual mode before creating a new conversation call', async () => {
+    mocks.turnMode.mockResolvedValueOnce({ state: 'accepted', turn_mode: 'manual' });
+    const { result, rerender } = renderHook(
+      ({ conversationId }) => useRealtimeSession({ enabled: true, target: 'fake', conversationId, getToken }),
+      { initialProps: { conversationId: 'hvc_1' } },
+    );
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    await act(async () => { await result.current.setManualTurnTaking(true); });
+    expect(result.current.manualTurnTaking).toBe(true);
+
+    rerender({ conversationId: 'hvc_2' });
+    expect(result.current.manualTurnTaking).toBe(false);
+    expect(result.current.manualCaptureState).toBe('idle');
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(2));
+    expect(mocks.createSession.mock.calls[1][0]).toEqual(expect.objectContaining({
+      conversationId: 'hvc_2', turnMode: 'server_vad',
+    }));
+  });
+
+  it('never reuses a supported target compatibility result for a pending or unsupported target', async () => {
+    const targetB = deferred<Record<string, unknown>>();
+    mocks.compatibility.mockImplementation((target: string) => (
+      target === 'target-a' ? Promise.resolve(supportedCompatibility) : targetB.promise
+    ));
+    const { result, rerender } = renderHook(
+      ({ target }) => useRealtimeSession({ enabled: true, target, conversationId: 'hvc_1', getToken }),
+      { initialProps: { target: 'target-a' } },
+    );
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+
+    rerender({ target: 'target-b' });
+    expect(result.current.state).toBe('checking');
+    expect(result.current.manualControlsAvailable).toBe(false);
+    await expect(result.current.connect()).rejects.toThrow('preflight has not passed for this target');
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+
+    targetB.resolve({ compatible: false, version: '1.0', reasons: ['manual endpoints missing'], contract: {} });
+    await waitFor(() => expect(result.current.state).toBe('blocked'));
+    expect(result.current.manualControlsAvailable).toBe(false);
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
   });
 
   it('suppresses the previous projection on the conversation-change render', async () => {
