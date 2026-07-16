@@ -151,6 +151,15 @@ export class RealtimeClient {
       const sdp = peer.localDescription?.sdp;
       if (!sdp) throw new Error('Browser did not produce a Realtime SDP offer');
       const session = await this.options.exchangeSdp(sdp);
+      if (
+        !session
+        || typeof session.answer_sdp !== 'string'
+        || !session.answer_sdp.trim()
+        || typeof session.realtime_session_id !== 'string'
+        || !session.realtime_session_id.trim()
+      ) {
+        throw new Error('Hermes could not confirm the Realtime session; reconnect to try again');
+      }
       // Ownership begins when the server creates the call, before browser activation succeeds.
       this.session = session;
       if (generation !== this.generation) {

@@ -102,6 +102,30 @@ describe('RealtimeClient', () => {
     expect(releaseSession).toHaveBeenCalledOnce();
   });
 
+  it('rejects an outcome-unknown create response before applying invalid SDP', async () => {
+    const track = { enabled: true, stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    const peer = new FakePeer();
+    const outcomeUnknown = {
+      client_request_id: 'create-unknown-1',
+      operation: 'create',
+      state: 'outcome_unknown',
+      accepted: false,
+    } as unknown as RealtimeSessionDocument;
+    const client = new RealtimeClient({
+      exchangeSdp: vi.fn(async () => outcomeUnknown),
+      activate: vi.fn(),
+      createPeer: () => peer as unknown as RTCPeerConnection,
+      getUserMedia: vi.fn(async () => stream),
+      createAudioElement: () => ({ autoplay: false, srcObject: null, play: vi.fn(), pause: vi.fn() }) as unknown as HTMLAudioElement,
+    });
+
+    await expect(client.connect()).rejects.toThrow('could not confirm');
+    expect(peer.setRemoteDescription).not.toHaveBeenCalled();
+    expect(peer.close).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
   it('aborts ICE gathering and removes its listener on close or target switch', async () => {
     const track = { enabled: true, stop: vi.fn() } as unknown as MediaStreamTrack;
     const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
