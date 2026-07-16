@@ -69,7 +69,8 @@ describe('console architecture seams', () => {
 
   const realtime = {
     mode: 'realtime',
-    connection: 'live',
+    readiness: 'live',
+    canReconnect: false,
     muted: false,
     manualTurnTaking: false,
     listening: false,
@@ -153,5 +154,28 @@ describe('console architecture seams', () => {
     rerender(<DesktopConsole controller={runningController} realtime={realtime} />);
     expect(within(view.container).getByLabelText('Message to agent')).toBeEnabled();
     expect(within(view.container).getByLabelText('Message to agent')).toHaveAttribute('placeholder', 'Keep talking to Hermes…');
+  });
+
+  it('keeps every mobile button at least 44 by 44 CSS pixels', () => {
+    const mobile = render(<MobileConsole controller={controller} realtime={{
+        ...realtime,
+        speaking: true,
+        manualTurnTaking: true,
+        onToggleMute: vi.fn(),
+        onToggleManualTurnTaking: vi.fn(),
+        onSendManualTurn: vi.fn(),
+        onInterrupt: vi.fn(),
+        onEndCall: vi.fn(),
+        onRequestStatus: vi.fn(),
+        onRefine: vi.fn(),
+        onRedirect: vi.fn(),
+        onCancel: vi.fn(),
+      }} />);
+    const buttons = Array.from(mobile.container.querySelectorAll('.mobile-console button'));
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(mobile.container.querySelectorAll('button')).toHaveLength(buttons.length);
+    const shell = mobile.container.querySelector<HTMLElement>('.mobile-console');
+    expect(shell?.style.getPropertyValue('--mobile-touch-target')).toBe('44px');
+    expect(buttons.every((button) => button.closest('.mobile-console') === shell)).toBe(true);
   });
 });

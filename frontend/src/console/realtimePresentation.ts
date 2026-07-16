@@ -1,9 +1,13 @@
-export type RealtimeConnectionState =
-  | 'connecting'
+export type RealtimeReadiness =
+  | 'connecting_audio'
+  | 'attaching_hermes'
   | 'live'
   | 'recovering'
+  | 'degraded'
   | 'disconnected'
   | 'blocked';
+
+export const MOBILE_TOUCH_TARGET_PX = 44;
 
 export type WorkerJobStatus =
   | 'queued'
@@ -43,8 +47,10 @@ export interface WorkerJobPresentation {
 
 export interface RealtimePresentationModel {
   mode: 'realtime' | 'legacy';
-  connection: RealtimeConnectionState;
-  connectionDetail?: string;
+  /** `live` means both browser media and authoritative Hermes control are ready. */
+  readiness: RealtimeReadiness;
+  readinessDetail?: string;
+  canReconnect: boolean;
   muted: boolean;
   manualTurnTaking: boolean;
   listening: boolean;
@@ -52,10 +58,14 @@ export interface RealtimePresentationModel {
   jobs: WorkerJobPresentation[];
   onToggleMute?: () => void;
   onToggleManualTurnTaking?: () => void;
+  onSendManualTurn?: () => void;
   onInterrupt?: () => void;
+  onEndCall?: () => void;
   onReconnect?: () => void;
+  onUseLegacy?: () => void;
   onRequestStatus?: (jobId: string) => void;
   onRefine?: (jobId: string) => void;
   onRedirect?: (jobId: string) => void;
   onCancel?: (jobId: string) => void;
+  artifactAllowedOrigins?: string[];
 }

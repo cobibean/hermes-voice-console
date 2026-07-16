@@ -58,15 +58,18 @@ code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff
 .conversation-list button { text-align: left; border-radius: 12px; color: #c8d6e8; background: #101d30; }
 .conversation-list button.active { color: #06101f; background: #8fc7ff; }
 .operator-label { color: #93a8c2; font-size: 0.82rem; line-height: 1.5; margin-top: 24px; }
-.realtime-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 68px; margin: 0 0 18px; padding: 12px 16px; border: 1px solid #365170; border-radius: 18px; background: rgba(8, 16, 29, .74); }
+.realtime-status-wrap { margin: 0 0 18px; padding: 12px 16px; border: 1px solid #365170; border-radius: 18px; background: rgba(8, 16, 29, .74); }
+.realtime-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 42px; }
 .realtime-status-copy { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .realtime-status-copy strong { display: block; color: #dfeeff; }
 .realtime-status-copy p { margin: 3px 0 0; color: #9fb3cc; font-size: .84rem; line-height: 1.4; }
 .connection-dot { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; background: #7c8ba0; box-shadow: 0 0 0 5px rgba(124, 139, 160, .12); }
-.realtime-status.connection-live .connection-dot { background: #58d9a4; box-shadow: 0 0 0 5px rgba(88, 217, 164, .12), 0 0 18px rgba(88, 217, 164, .45); }
-.realtime-status.connection-connecting .connection-dot, .realtime-status.connection-recovering .connection-dot { background: #f8d477; animation: pulse 1.3s infinite; }
-.realtime-status.connection-blocked { border-color: #80536a; background: rgba(54, 24, 39, .64); }
-.realtime-status.connection-blocked .connection-dot { background: #ff7f9a; }
+.realtime-status-wrap.readiness-live .connection-dot { background: #58d9a4; box-shadow: 0 0 0 5px rgba(88, 217, 164, .12), 0 0 18px rgba(88, 217, 164, .45); }
+.realtime-status-wrap.readiness-connecting_audio .connection-dot, .realtime-status-wrap.readiness-attaching_hermes .connection-dot, .realtime-status-wrap.readiness-recovering .connection-dot { background: #f8d477; animation: pulse 1.3s infinite; }
+.realtime-status-wrap.readiness-degraded { border-color: #806635; background: rgba(51, 42, 24, .64); }
+.realtime-status-wrap.readiness-blocked { border-color: #80536a; background: rgba(54, 24, 39, .64); }
+.realtime-status-wrap.readiness-blocked .connection-dot, .realtime-status-wrap.readiness-degraded .connection-dot { background: #ff9f7a; }
+.realtime-status-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0 22px; }
 .realtime-presence { display: flex; gap: 8px; margin-left: auto; }
 .realtime-presence span { border: 1px solid #315a67; border-radius: 999px; padding: 5px 9px; color: #8be4d1; background: #0b262c; font-size: .75rem; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
 .realtime-voice-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; padding: 14px; border: 1px solid #2f4362; border-radius: 18px; background: rgba(13, 23, 40, .76); }
@@ -113,6 +116,7 @@ code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff
 .job-artifacts a { color: #8fc7ff; }
 .worker-job-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
 .worker-job-actions button { padding: .48rem .72rem; font-size: .78rem; }
+.touch-target { min-width: 44px; min-height: 44px; }
 .composer { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 12px; }
 .composer button { min-width: 84px; }
 .inspector-heading h2 { margin-top: 4px; text-transform: capitalize; }
@@ -124,11 +128,12 @@ code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff
 .compact-inspector .card { box-shadow: none; }
 .activity-actions { margin-bottom: 16px; }
 .mobile-console { min-height: 100dvh; padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) calc(165px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); max-width: 680px; margin: 0 auto; }
+.mobile-console button { min-width: var(--mobile-touch-target, 44px); min-height: var(--mobile-touch-target, 44px); }
 .mobile-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 4px 18px; }
 .mobile-header .eyebrow { margin: 0 0 4px; }
 .mobile-settings summary, .mobile-activity > summary { cursor: pointer; font-weight: 750; }
-.mobile-console > .realtime-status { margin-bottom: 14px; }
-.mobile-console > .realtime-status .realtime-presence { display: none; }
+.mobile-console > .realtime-status-wrap { margin-bottom: 14px; }
+.mobile-console > .realtime-status-wrap .realtime-presence { display: none; }
 .mobile-settings[open] summary, .mobile-activity[open] > summary { margin-bottom: 16px; }
 .mobile-risk { padding: 16px; background: #2b2215; border: 1px solid #745d2c; border-radius: 16px; margin-bottom: 14px; }
 .mobile-conversation .card { padding: 16px; border-radius: 18px; }
@@ -142,7 +147,7 @@ code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff
 .mobile-console > .controls > .speech-fallback { display: block; position: fixed; left: max(14px, env(safe-area-inset-left)); right: 96px; bottom: calc(86px + env(safe-area-inset-bottom)); }
 .mobile-composer-dock { position: fixed; z-index: 3; left: 0; right: 0; bottom: 0; padding: 10px max(94px, calc(14px + env(safe-area-inset-right))) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); background: rgba(7, 14, 25, .95); backdrop-filter: blur(16px); border-top: 1px solid #263b58; }
 .mobile-console > .realtime-voice-controls { position: fixed; z-index: 4; right: max(12px, env(safe-area-inset-right)); bottom: calc(72px + env(safe-area-inset-bottom)); width: auto; max-width: calc(100vw - 24px); margin: 0; padding: 8px; box-shadow: 0 12px 35px rgba(0, 0, 0, .38); }
-.mobile-console > .realtime-voice-controls button { padding: .55rem .7rem; font-size: .76rem; }
+.mobile-console > .realtime-voice-controls button { min-width: 44px; min-height: 44px; padding: .55rem .7rem; font-size: .76rem; }
 .mobile-console > .realtime-voice-controls p { display: none; }
 .composer-mobile { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 .composer-mobile textarea { min-height: 48px; max-height: 120px; }
@@ -160,4 +165,4 @@ code { background: #050b14; border-radius: 6px; padding: 2px 6px; color: #b6e3ff
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .001ms !important; } }
 @media (forced-colors: active) { button, input, select, textarea, .card, .modal-card { border: 1px solid ButtonText; } .input-meter { border: 1px solid CanvasText; } .input-meter span { background: Highlight; } }
 @media (max-width: 1050px) { .desktop-command-grid { grid-template-columns: 220px minmax(0, 1fr); } }
-@media (max-width: 780px) { .grid.two { grid-template-columns: 1fr; } .hero { flex-direction: column; } .shell { padding: 18px; } .realtime-status { align-items: flex-start; flex-wrap: wrap; } .realtime-status > button { margin-left: 22px; } .worker-job-header { flex-direction: column; gap: 8px; } }
+@media (max-width: 780px) { .grid.two { grid-template-columns: 1fr; } .hero { flex-direction: column; } .shell { padding: 18px; } .realtime-status { align-items: flex-start; flex-wrap: wrap; } .worker-job-header { flex-direction: column; gap: 8px; } .worker-job-actions button, .realtime-status-actions button { min-width: 44px; min-height: 44px; } }

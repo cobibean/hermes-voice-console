@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { ApprovalModal } from '../components/ApprovalModal';
 import { TargetPicker } from '../components/TargetPicker';
 import { TranscriptPanel } from '../components/TranscriptPanel';
@@ -9,7 +9,7 @@ import { ActivitySheet } from './ActivitySheet';
 import { Composer } from './shared/Composer';
 import { RealtimeStatusBar, RealtimeVoiceControls } from './shared/RealtimeStatusBar';
 import type { ConsoleController } from './useConsoleController';
-import type { RealtimePresentationModel } from './realtimePresentation';
+import { MOBILE_TOUCH_TARGET_PX, type RealtimePresentationModel } from './realtimePresentation';
 
 export function MobileConsole({
   controller,
@@ -25,7 +25,12 @@ export function MobileConsole({
   const bootstrap = controller.bootstrap;
   if (!bootstrap) return null;
   return (
-    <main className="mobile-console" data-console-shell="mobile" data-view-state={controller.viewState}>
+    <main
+      className="mobile-console"
+      data-console-shell="mobile"
+      data-view-state={controller.viewState}
+      style={{ '--mobile-touch-target': `${MOBILE_TOUCH_TARGET_PX}px` } as CSSProperties}
+    >
       <header className="mobile-header">
         <div>
           <p className="eyebrow">Hermes Voice Console</p>

@@ -13,6 +13,47 @@ function safeProgress(progress?: number): number | undefined {
   if (typeof progress !== 'number') return undefined;
   return Math.max(0, Math.min(100, Math.round(progress)));
 }
+
+const appArtifactPrefixes = ['/artifacts/', '/api/artifacts/'];
+
+export function safeArtifactLink(
+  href: string | undefined,
+  allowedOrigins: string[] = [],
+): { href: string; external: boolean } | null {
+  if (!href || href.includes('\\')) return null;
+  if (href.startsWith('/') && !href.startsWith('//')) {
+    try {
+      const parsed = new URL(href, window.location.origin);
+      if (parsed.origin !== window.location.origin) return null;
+      if (!appArtifactPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) return null;
+      return { href: `${parsed.pathname}${parsed.search}${parsed.hash}`, external: false };
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const parsed = new URL(href);
+    const allowlist = new Set(allowedOrigins.flatMap((origin) => {
+      try {
+        const allowed = new URL(origin);
+        return allowed.protocol === 'https:' ? [allowed.origin] : [];
+      } catch {
+        return [];
+      }
+    }));
+    if (
+      parsed.protocol !== 'https:'
+      || parsed.origin === window.location.origin
+      || parsed.username
+      || parsed.password
+      || !allowlist.has(parsed.origin)
+    ) return null;
+    return { href: parsed.href, external: true };
+  } catch {
+    return null;
+  }
+}
+
 function WorkerJobCard({ job, realtime }: { job: WorkerJobPresentation; realtime: RealtimePresentationModel }) {
   const progress = safeProgress(job.progress);
   return (
@@ -58,7 +99,18 @@ function WorkerJobCard({ job, realtime }: { job: WorkerJobPresentation; realtime
           <ul>
             {job.artifacts.map((artifact) => (
               <li key={artifact.id}>
-                {artifact.href ? <a href={artifact.href}>{artifact.label}</a> : <span>{artifact.label}</span>}
+                {(() => {
+                  const link = safeArtifactLink(artifact.href, realtime.artifactAllowedOrigins);
+                  return link ? (
+                    <a
+                      href={link.href}
+                      target={link.external ? '_blank' : undefined}
+                      rel={link.external ? 'noopener noreferrer' : undefined}
+                    >
+                      {artifact.label}
+                    </a>
+                  ) : <span>{artifact.label}</span>;
+                })()}
                 {artifact.kind ? <small>{artifact.kind}</small> : null}
               </li>
             ))}
@@ -67,12 +119,12 @@ function WorkerJobCard({ job, realtime }: { job: WorkerJobPresentation; realtime
       ) : null}
       {job.verification ? <p className="job-verification"><strong>Verified:</strong> {job.verification}</p> : null}
       <footer className="worker-job-actions" aria-label={`Controls for ${job.title}`}>
-        <button type="button" className="secondary" onClick={() => realtime.onRequestStatus?.(job.id)} disabled={!realtime.onRequestStatus}>Status</button>
-        <button type="button" className="secondary" onClick={() => realtime.onRefine?.(job.id)} disabled={!realtime.onRefine}>Refine</button>
-        <button type="button" className="secondary" onClick={() => realtime.onRedirect?.(job.id)} disabled={!realtime.onRedirect}>Redirect</button>
+        <button type="button" className="secondary touch-target" onClick={() => realtime.onRequestStatus?.(job.id)} disabled={!realtime.onRequestStatus}>Status</button>
+        <button type="button" className="secondary touch-target" onClick={() => realtime.onRefine?.(job.id)} disabled={!realtime.onRefine}>Refine</button>
+        <button type="button" className="secondary touch-target" onClick={() => realtime.onRedirect?.(job.id)} disabled={!realtime.onRedirect}>Redirect</button>
         <button
           type="button"
-          className="secondary"
+          className="secondary touch-target"
           onClick={() => realtime.onCancel?.(job.id)}
           disabled={!realtime.onCancel || !['queued', 'running', 'awaiting_approval'].includes(job.status)}
         >
