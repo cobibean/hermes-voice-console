@@ -3,6 +3,7 @@ import type { RealtimeMediaState, RealtimeSessionDocument } from './realtimeType
 export interface RealtimePeerOptions {
   exchangeSdp: (offer: string) => Promise<RealtimeSessionDocument>;
   activate: (session: RealtimeSessionDocument) => Promise<void>;
+  releaseSession?: (session: RealtimeSessionDocument) => Promise<void>;
   onState?: (state: RealtimeMediaState) => void;
   onRemoteStream?: (stream: MediaStream) => void;
   onUntrustedData?: (value: unknown) => void;
@@ -12,15 +13,30 @@ export interface RealtimePeerOptions {
   createUntrustedDataChannel?: boolean;
 }
 
-function waitForIceGathering(peer: RTCPeerConnection): Promise<void> {
+function waitForIceGathering(peer: RTCPeerConnection, signal: AbortSignal, timeoutMs = 8_000): Promise<void> {
   if (peer.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('Realtime ICE gathering timed out'));
+    }, timeoutMs);
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      peer.removeEventListener('icegatheringstatechange', listener);
+      signal.removeEventListener('abort', aborted);
+    };
+    const aborted = () => {
+      cleanup();
+      reject(new Error('Realtime media connection was superseded'));
+    };
     const listener = () => {
       if (peer.iceGatheringState !== 'complete') return;
-      peer.removeEventListener('icegatheringstatechange', listener);
+      cleanup();
       resolve();
     };
     peer.addEventListener('icegatheringstatechange', listener);
+    signal.addEventListener('abort', aborted, { once: true });
+    listener();
   });
 }
 
@@ -131,20 +147,28 @@ export class RealtimeClient {
     try {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      await waitForIceGathering(peer);
+      await waitForIceGathering(peer, abort.signal);
       const sdp = peer.localDescription?.sdp;
       if (!sdp) throw new Error('Browser did not produce a Realtime SDP offer');
       const session = await this.options.exchangeSdp(sdp);
-      if (generation !== this.generation) throw new Error('Realtime media connection was superseded');
+      // Ownership begins when the server creates the call, before browser activation succeeds.
+      this.session = session;
+      if (generation !== this.generation) {
+        this.session = null;
+        await this.options.releaseSession?.(session).catch(() => undefined);
+        throw new Error('Realtime media connection was superseded');
+      }
       await peer.setRemoteDescription({ type: 'answer', sdp: session.answer_sdp });
       await this.options.activate(session);
       await waitForConnected(peer, abort.signal);
       if (generation !== this.generation) throw new Error('Realtime media connection was superseded');
-      this.session = session;
       this.options.onState?.('connected');
       return session;
     } catch (error) {
       if (generation === this.generation) {
+        const owned = this.session;
+        this.session = null;
+        if (owned) await this.options.releaseSession?.(owned).catch(() => undefined);
         this.options.onState?.('failed');
         this.releasePeer();
       }

@@ -3,7 +3,11 @@ import type {
   RealtimeControlFrame,
   RealtimeControlState,
   RealtimeEvent,
+  RealtimeApprovalResult,
+  RealtimeInputResult,
+  RealtimeInterruptResult,
   RealtimeSnapshot,
+  RealtimeWorkerCommandResult,
 } from './realtimeTypes';
 
 export interface RealtimeControlOptions {
@@ -23,6 +27,14 @@ export interface RealtimeControlOptions {
 }
 
 type Command = Record<string, unknown> & { type: string; client_request_id: string };
+type ResultKind = 'input' | 'interrupt' | 'approval' | 'worker';
+interface PendingCommand {
+  kind: ResultKind;
+  command: Command;
+  resolve: (result: Record<string, unknown>) => void;
+  reject: (error: Error) => void;
+  timeout: number;
+}
 
 /** Authoritative non-media channel. It snapshots before replay and deduplicates by event ID. */
 export class RealtimeControlClient {
@@ -34,6 +46,8 @@ export class RealtimeControlClient {
   private snapshotReceived = false;
   private cursor: string | null;
   private readonly seen = new Set<string>();
+  private socketGeneration = 0;
+  private readonly pending = new Map<string, PendingCommand>();
 
   constructor(options: RealtimeControlOptions) {
     this.options = options;
@@ -59,25 +73,36 @@ export class RealtimeControlClient {
     const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${scheme}//${window.location.host}/ws/realtime`;
     const socket = this.options.createSocket?.(url) ?? new WebSocket(url);
+    const generation = ++this.socketGeneration;
     this.socket = socket;
     this.snapshotReceived = false;
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      const current = () => this.socket === socket && this.socketGeneration === generation;
       const fail = (error: Error) => {
         if (!settled) { settled = true; reject(error); }
       };
       socket.addEventListener('open', () => {
+        if (!current()) return;
         void this.options.getToken(false)
           .then((token) => {
-            if (this.socket === socket && socket.readyState === WebSocket.OPEN) {
+            if (current() && socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: 'auth', token }));
             }
           })
-          .catch((error: unknown) => fail(error as Error));
+          .catch((error: unknown) => {
+            if (!current()) return;
+            fail(error as Error);
+            socket.close();
+          });
       }, { once: true });
-      socket.addEventListener('error', () => fail(new Error('Realtime control connection failed')), { once: true });
+      socket.addEventListener('error', () => {
+        if (!current()) return;
+        fail(new Error('Realtime control connection failed'));
+        socket.close();
+      }, { once: true });
       socket.addEventListener('message', (message) => {
-        if (this.socket !== socket) return;
+        if (!current()) return;
         if (typeof message.data !== 'string') return;
         let frame: RealtimeControlFrame;
         try { frame = JSON.parse(message.data) as RealtimeControlFrame; }
@@ -130,14 +155,22 @@ export class RealtimeControlClient {
           socket.send(JSON.stringify({ type: 'heartbeat.ack' }));
           return;
         }
+        if (frame.type === 'ack') {
+          this.resolveCommand(frame.client_request_id, frame.result);
+          return;
+        }
         if (frame.type === 'error') {
           this.options.onError?.(frame.message);
+          this.options.onState?.('degraded');
+          this.rejectCommands(new Error(frame.message));
           if (!settled) fail(new Error(frame.message));
         }
       });
       socket.addEventListener('close', () => {
-        if (this.socket === socket) this.socket = null;
+        if (!current()) return;
+        this.socket = null;
         this.snapshotReceived = false;
+        this.rejectCommands(new Error('Realtime control connection closed'));
         if (!settled) fail(new Error('Realtime control closed before ready'));
         if (!this.closedByOwner && this.options.reconnect !== false) this.scheduleReconnect();
         else this.options.onState?.('closed');
@@ -166,41 +199,91 @@ export class RealtimeControlClient {
     }, this.options.reconnectDelayMs ?? 750);
   }
 
-  send(command: Command): void {
+  private validateResult(pending: PendingCommand, requestId: string, raw: unknown): Record<string, unknown> {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Hermes returned an invalid control acknowledgement');
+    const result = raw as Record<string, unknown>;
+    const { kind, command } = pending;
+    const idKey = kind === 'worker' ? 'command_id' : 'client_request_id';
+    if (result[idKey] !== requestId) throw new Error('Hermes returned a mismatched control acknowledgement');
+    if (kind === 'input' && (result.accepted !== true || result.state !== 'accepted')) throw new Error('Hermes rejected the typed input');
+    if (kind === 'interrupt' && (result.interrupted !== true || result.state !== 'accepted' || result.realtime_session_id !== this.options.sessionId)) throw new Error('Hermes rejected the speech interruption');
+    if (kind === 'approval' && (typeof result.accepted !== 'boolean' || !['resolved', 'denied'].includes(String(result.state)) || result.approval_id !== command.approval_id)) throw new Error('Hermes returned an invalid approval acknowledgement');
+    if (kind === 'worker') {
+      if (typeof result.resulting_revision !== 'number' || !Number.isInteger(result.resulting_revision)) throw new Error('Hermes returned an invalid worker revision');
+      if (result.operation !== command.operation || (result.worker_job_id !== undefined && result.worker_job_id !== command.worker_job_id)) throw new Error('Hermes returned a mismatched worker acknowledgement');
+      if (result.accepted !== true || result.acknowledgement === 'rejected') throw new Error('Hermes rejected the worker command');
+    }
+    return result;
+  }
+
+  private resolveCommand(requestId: string, raw: unknown): void {
+    const pending = this.pending.get(requestId);
+    if (!pending) return;
+    window.clearTimeout(pending.timeout);
+    this.pending.delete(requestId);
+    try { pending.resolve(this.validateResult(pending, requestId, raw)); }
+    catch (error) { pending.reject(error as Error); }
+  }
+
+  private rejectCommands(error: Error): void {
+    for (const pending of this.pending.values()) {
+      window.clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  send(command: Command, kind: ResultKind): Promise<Record<string, unknown>> {
     if (!this.isReady || !this.socket) throw new Error('Hermes Realtime control is not ready');
     if (this.socket.bufferedAmount > (this.options.maxBufferedBytes ?? 256 * 1024)) {
       this.options.onState?.('degraded');
       throw new Error('Hermes Realtime control is backpressured');
     }
+    if (this.pending.size >= 128) throw new Error('Too many pending Hermes control commands');
+    if (this.pending.has(command.client_request_id)) throw new Error('Duplicate Hermes control request ID');
     this.options.onState?.('ready');
-    this.socket.send(JSON.stringify(command));
+    return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        this.pending.delete(command.client_request_id);
+        reject(new Error(`Hermes ${kind} acknowledgement timed out`));
+      }, 15_000);
+      this.pending.set(command.client_request_id, { kind, command, resolve, reject, timeout });
+      try { this.socket!.send(JSON.stringify(command)); }
+      catch (error) {
+        window.clearTimeout(timeout);
+        this.pending.delete(command.client_request_id);
+        reject(error as Error);
+      }
+    });
   }
 
-  input(clientRequestId: string, text: string, sessionGeneration: number): void {
-    this.send({ type: 'input', client_request_id: clientRequestId, text, session_generation: sessionGeneration });
+  async input(clientRequestId: string, text: string, sessionGeneration: number): Promise<RealtimeInputResult> {
+    return await this.send({ type: 'input', client_request_id: clientRequestId, text, session_generation: sessionGeneration }, 'input') as unknown as RealtimeInputResult;
   }
-  interrupt(clientRequestId: string, sessionGeneration: number): void {
-    this.send({ type: 'interrupt', client_request_id: clientRequestId, session_generation: sessionGeneration });
+  async interrupt(clientRequestId: string, sessionGeneration: number): Promise<RealtimeInterruptResult> {
+    return await this.send({ type: 'interrupt', client_request_id: clientRequestId, session_generation: sessionGeneration }, 'interrupt') as unknown as RealtimeInterruptResult;
   }
-  approval(clientRequestId: string, approvalId: string, choice: string, sessionGeneration: number): void {
-    this.send({ type: 'approval', client_request_id: clientRequestId, approval_id: approvalId, choice, session_generation: sessionGeneration });
+  async approval(clientRequestId: string, approvalId: string, choice: string, sessionGeneration: number): Promise<RealtimeApprovalResult> {
+    return await this.send({ type: 'approval', client_request_id: clientRequestId, approval_id: approvalId, choice, session_generation: sessionGeneration }, 'approval') as unknown as RealtimeApprovalResult;
   }
-  workerCommand(
+  async workerCommand(
     clientRequestId: string,
     workerJobId: string,
     operation: 'refine' | 'redirect' | 'cancel',
     expectedRevision: number,
     payload: Record<string, unknown> = {},
-  ): void {
-    this.send({ type: 'worker.command', client_request_id: clientRequestId, worker_job_id: workerJobId, operation, expected_revision: expectedRevision, payload });
+  ): Promise<RealtimeWorkerCommandResult> {
+    return await this.send({ type: 'worker.command', client_request_id: clientRequestId, worker_job_id: workerJobId, operation, expected_revision: expectedRevision, payload }, 'worker') as unknown as RealtimeWorkerCommandResult;
   }
 
   close(): void {
     this.closedByOwner = true;
+    this.socketGeneration += 1;
     if (this.reconnectTimer !== null) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.connectPromise = null;
     this.snapshotReceived = false;
+    this.rejectCommands(new Error('Realtime control connection closed'));
     this.socket?.close();
     this.socket = null;
     this.options.onState?.('closed');

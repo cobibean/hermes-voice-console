@@ -53,6 +53,18 @@ export type RealtimeControlFrame =
   | { type: 'ack'; client_request_id: string; result: Record<string, unknown> }
   | { type: 'error'; code: string; message: string; recoverable?: boolean };
 
+export interface RealtimeInputResult { client_request_id: string; accepted: true; state: 'accepted' }
+export interface RealtimeInterruptResult extends RealtimeInputResult { realtime_session_id: string; interrupted: true }
+export interface RealtimeApprovalResult { client_request_id: string; approval_id: string; accepted: boolean; state: 'resolved' | 'denied' }
+export interface RealtimeWorkerCommandResult {
+  command_id: string;
+  worker_job_id?: string;
+  operation: 'refine' | 'redirect' | 'cancel';
+  accepted: boolean;
+  acknowledgement?: 'queued' | 'applied' | 'rejected' | 'already_applied';
+  resulting_revision: number;
+}
+
 export type RealtimeMediaState = 'idle' | 'requesting_microphone' | 'negotiating' | 'connected' | 'failed' | 'closed';
 export type RealtimeControlState = 'idle' | 'authenticating' | 'subscribing' | 'ready' | 'reconnecting' | 'degraded' | 'closed';
 

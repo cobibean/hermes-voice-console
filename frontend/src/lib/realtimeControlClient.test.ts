@@ -47,8 +47,21 @@ describe('RealtimeControlClient', () => {
     sockets[0].json({ type: 'event', event: { event_id: 'ev_2', type: 'worker.running', conversation_id: 'hvc_1', payload: { worker_job_id: 'job_1' } } });
     expect(events).toHaveBeenCalledTimes(1);
     expect(snapshots).toHaveBeenCalledWith(expect.objectContaining({ conversation_id: 'hvc_1' }), 'initial');
-    client.input('input-1', 'hello', 2);
+    const input = client.input('input-1', 'hello', 2);
     expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({ type: 'input', client_request_id: 'input-1', text: 'hello', session_generation: 2 });
+    sockets[0].json({ type: 'ack', client_request_id: 'input-1', result: { client_request_id: 'input-1', accepted: true, state: 'accepted' } });
+    await expect(input).resolves.toEqual(expect.objectContaining({ accepted: true }));
+
+    const approval = client.approval('approval-request-1', 'approval_1', 'once', 2);
+    sockets[0].json({ type: 'ack', client_request_id: 'approval-request-1', result: { client_request_id: 'approval-request-1', approval_id: 'approval_1', accepted: true, state: 'resolved' } });
+    await expect(approval).resolves.toEqual(expect.objectContaining({ approval_id: 'approval_1' }));
+
+    const worker = client.workerCommand('worker-command-1', 'job_1', 'refine', 3, { context: 'Use the safer path' });
+    sockets[0].json({ type: 'ack', client_request_id: 'worker-command-1', result: { command_id: 'worker-command-1', worker_job_id: 'job_1', operation: 'refine', accepted: true, acknowledgement: 'applied', resulting_revision: 4 } });
+    await expect(worker).resolves.toEqual(expect.objectContaining({ resulting_revision: 4 }));
+    const conflict = client.workerCommand('worker-command-2', 'job_1', 'redirect', 3, { goal: 'new goal' });
+    sockets[0].json({ type: 'error', code: 'revision_conflict', message: 'Worker revision conflict' });
+    await expect(conflict).rejects.toThrow('revision conflict');
     client.close();
   });
 
@@ -89,6 +102,35 @@ describe('RealtimeControlClient', () => {
     socket.json({ type: 'subscribed', realtime_session_id: 'rt_1', after: null, cursor_rebased: false });
     await connected;
     socket.bufferedAmount = 11;
-    expect(() => client.interrupt('interrupt-1', 1)).toThrow('backpressured');
+    await expect(client.interrupt('interrupt-1', 1)).rejects.toThrow('backpressured');
+  });
+
+  it('fences a failed token socket so its late close cannot replace the ready retry', async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const getToken = vi.fn()
+      .mockRejectedValueOnce(new Error('token failed'))
+      .mockResolvedValue(null);
+    const client = new RealtimeControlClient({
+      getToken, target: 'fake', conversationId: 'hvc_1', sessionId: 'rt_1',
+      onSnapshot: vi.fn(), onEvent: vi.fn(), reconnectDelayMs: 10,
+      createSocket: () => { const socket = new FakeSocket(); sockets.push(socket); return socket as unknown as WebSocket; },
+    });
+    const first = client.connect();
+    sockets[0].emit('open');
+    await expect(first).rejects.toThrow('token failed');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(2);
+    sockets[1].emit('open'); await Promise.resolve();
+    sockets[1].json({ type: 'auth.ok', principal_kind: 'development', expires_at: null });
+    sockets[1].json({ type: 'snapshot', snapshot: { conversation_id: 'hvc_1', last_event_id: 'ev_9' } });
+    sockets[1].json({ type: 'subscribed', realtime_session_id: 'rt_1', after: 'ev_9', cursor_rebased: true });
+    await Promise.resolve();
+    expect(client.isReady).toBe(true);
+    sockets[0].emit('close');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(client.isReady).toBe(true);
+    expect(sockets).toHaveLength(2);
+    client.close();
   });
 });

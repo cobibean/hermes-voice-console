@@ -11,7 +11,7 @@ import { voiceDiagnostic } from '../lib/diagnostics';
 import type { VoiceTransport } from '../lib/realtimeTypes';
 import { useLegacyVoiceSession } from './useLegacyVoiceSession';
 import { useRealtimeSession } from './useRealtimeSession';
-import { presentRealtimeJobs, realtimeReadiness } from './buildRealtimePresentation';
+import { presentRealtimeJobs, realtimeReadiness, workerControlPayload } from './buildRealtimePresentation';
 import type { RealtimePresentationModel } from './realtimePresentation';
 import { mergeConversationMessages } from './conversationProjection';
 
@@ -405,7 +405,7 @@ export function useConsoleController({
     try {
       if (transport === 'realtime') {
         await realtimeSession.connect();
-        realtimeSession.sendInput(text);
+        await realtimeSession.sendInput(text);
         setMessages((current) => [...current, { role: 'user', content: text }]);
         setTextDraft('');
         pendingTextTurnRef.current = null;
@@ -456,8 +456,8 @@ export function useConsoleController({
 
   const cancelSpeech = useCallback(() => {
     if (transport === 'realtime') {
-      try { realtimeSession.interruptSpeech(); }
-      catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+      void realtimeSession.interruptSpeech()
+        .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
     }
     else legacySession.cancelSpeech(activeTurnIdRef.current ?? '');
     dispatch({ type: 'playback.cancel' });
@@ -491,8 +491,8 @@ export function useConsoleController({
   const resolveApproval = useCallback((decision: ApprovalDecision) => {
     if (transport === 'realtime') {
       if (!realtimeApproval) return;
-      try { realtimeSession.resolveApproval(realtimeApproval.runId, decision); }
-      catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+      void realtimeSession.resolveApproval(realtimeApproval.runId, decision)
+        .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
       return;
     }
     if (!approval) return;
@@ -559,8 +559,8 @@ export function useConsoleController({
       dispatch({ type: 'error', message: 'Worker state is missing its current revision. Reconnect before controlling it.' });
       return;
     }
-    try { realtimeSession.workerCommand(jobId, operation, revision, payload); }
-    catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+    void realtimeSession.workerCommand(jobId, operation, revision, payload)
+      .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
   };
   const realtime = useMemo<RealtimePresentationModel>(() => ({
     mode: transport,
@@ -582,16 +582,16 @@ export function useConsoleController({
     onReconnect: transport === 'realtime' ? () => { void realtimeSession.connect().catch(dispatchError); } : undefined,
     onUseLegacy: transport === 'realtime' ? () => setTransport('legacy') : undefined,
     onRequestStatus: transport === 'realtime' ? (jobId) => {
-      try { realtimeSession.sendInput(`Give me a concise status update for delegated task ${jobId}.`); }
-      catch (error) { dispatch({ type: 'error', message: (error as Error).message }); }
+      void realtimeSession.sendInput(`Give me a concise status update for delegated task ${jobId}.`)
+        .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
     } : undefined,
     onRefine: transport === 'realtime' ? (jobId) => {
       const instruction = window.prompt('How should Hermes refine this task?')?.trim();
-      if (instruction) runWorkerCommand(jobId, 'refine', { instruction });
+      if (instruction) runWorkerCommand(jobId, 'refine', workerControlPayload('refine', instruction));
     } : undefined,
     onRedirect: transport === 'realtime' ? (jobId) => {
       const instruction = window.prompt('What direction should Hermes take instead?')?.trim();
-      if (instruction) runWorkerCommand(jobId, 'redirect', { instruction });
+      if (instruction) runWorkerCommand(jobId, 'redirect', workerControlPayload('redirect', instruction));
     } : undefined,
     onCancel: transport === 'realtime' ? (jobId) => runWorkerCommand(jobId, 'cancel') : undefined,
   }), [cancelSpeech, dispatchError, realtimeSession, setTransport, transport]);

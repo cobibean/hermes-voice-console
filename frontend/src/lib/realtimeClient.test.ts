@@ -15,6 +15,15 @@ class FakePeer extends EventTarget {
   iceGatheringState = 'complete';
   localDescription: RTCSessionDescription | null = null;
   tracks: MediaStreamTrack[] = [];
+  listenerCounts: Record<string, number> = {};
+  override addEventListener(type: string, callback: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions): void {
+    this.listenerCounts[type] = (this.listenerCounts[type] ?? 0) + 1;
+    super.addEventListener(type, callback, options);
+  }
+  override removeEventListener(type: string, callback: EventListenerOrEventListenerObject | null, options?: boolean | EventListenerOptions): void {
+    this.listenerCounts[type] = Math.max(0, (this.listenerCounts[type] ?? 0) - 1);
+    super.removeEventListener(type, callback, options);
+  }
   close = vi.fn(() => { this.connectionState = 'closed'; });
   addTrack(track: MediaStreamTrack): RTCRtpSender { this.tracks.push(track); return {} as RTCRtpSender; }
   createOffer = vi.fn(async () => ({ type: 'offer' as RTCSdpType, sdp: 'v=0\r\noffer' }));
@@ -73,5 +82,42 @@ describe('RealtimeClient', () => {
     release(stream);
     await expect(connecting).rejects.toThrow('superseded');
     expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it('releases an upstream call exactly once when post-SDP activation fails', async () => {
+    const track = { enabled: true, stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    const releaseSession = vi.fn(async () => undefined);
+    const client = new RealtimeClient({
+      exchangeSdp: vi.fn(async () => fakeSession()),
+      activate: vi.fn(async () => { throw new Error('activation failed'); }),
+      releaseSession,
+      createPeer: () => new FakePeer() as unknown as RTCPeerConnection,
+      getUserMedia: vi.fn(async () => stream),
+      createAudioElement: () => ({ autoplay: false, srcObject: null, play: vi.fn(), pause: vi.fn() }) as unknown as HTMLAudioElement,
+    });
+    await expect(client.connect()).rejects.toThrow('activation failed');
+    expect(releaseSession).toHaveBeenCalledOnce();
+    client.close();
+    expect(releaseSession).toHaveBeenCalledOnce();
+  });
+
+  it('aborts ICE gathering and removes its listener on close or target switch', async () => {
+    const track = { enabled: true, stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+    const peer = new FakePeer();
+    peer.iceGatheringState = 'gathering';
+    const exchangeSdp = vi.fn();
+    const client = new RealtimeClient({
+      exchangeSdp, activate: vi.fn(), createPeer: () => peer as unknown as RTCPeerConnection,
+      getUserMedia: vi.fn(async () => stream),
+      createAudioElement: () => ({ autoplay: false, srcObject: null, play: vi.fn(), pause: vi.fn() }) as unknown as HTMLAudioElement,
+    });
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(peer.localDescription).not.toBeNull());
+    client.close();
+    await expect(connecting).rejects.toThrow('superseded');
+    expect(exchangeSdp).not.toHaveBeenCalled();
+    expect(peer.listenerCounts.icegatheringstatechange).toBe(0);
   });
 });

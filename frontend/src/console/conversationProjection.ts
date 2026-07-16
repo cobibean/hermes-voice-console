@@ -85,10 +85,14 @@ export function projectRealtimeSnapshot(snapshot: RealtimeSnapshot): RealtimeCon
   const rawMessages = Array.isArray(snapshot.messages)
     ? snapshot.messages
     : Array.isArray(snapshot.transcript) ? snapshot.transcript : [];
-  const messages = rawMessages.filter((value): value is ConversationMessage => {
-    if (!value || typeof value !== 'object') return false;
-    const message = value as Partial<ConversationMessage>;
-    return ['user', 'assistant', 'tool'].includes(message.role ?? '') && typeof message.content === 'string';
+  const messages = rawMessages.flatMap((value): ConversationMessage[] => {
+    if (!value || typeof value !== 'object') return [];
+    const message = value as Record<string, unknown>;
+    const role = message.role;
+    const content = typeof message.content === 'string' ? message.content : message.text;
+    return ['user', 'assistant', 'tool'].includes(String(role)) && typeof content === 'string'
+      ? [{ role: role as ConversationMessage['role'], content }]
+      : [];
   });
   return {
     cursor: snapshot.last_event_id,

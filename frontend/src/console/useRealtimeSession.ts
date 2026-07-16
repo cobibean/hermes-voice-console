@@ -50,10 +50,18 @@ export interface RealtimeSessionController {
   setManualTurnTaking: (manual: boolean) => void;
   startManualTurn: () => void;
   stopManualTurn: () => void;
-  sendInput: (text: string) => void;
-  interruptSpeech: () => void;
-  resolveApproval: (approvalId: string, choice: string) => void;
-  workerCommand: (workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload?: Record<string, unknown>) => void;
+  sendInput: (text: string) => Promise<void>;
+  interruptSpeech: () => Promise<void>;
+  resolveApproval: (approvalId: string, choice: string) => Promise<void>;
+  workerCommand: (workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload?: Record<string, unknown>) => Promise<void>;
+}
+
+export function projectionForIdentity(
+  projection: RealtimeConversationProjection,
+  projectionIdentity: string,
+  currentIdentity: string,
+): RealtimeConversationProjection {
+  return projectionIdentity === currentIdentity ? projection : emptyRealtimeProjection;
 }
 
 export function useRealtimeSession({
@@ -75,8 +83,15 @@ export function useRealtimeSession({
   const [suspended, setSuspended] = useState(false);
   const [turnMode, setTurnMode] = useState<RealtimeTurnMode>('server_vad');
   const [projection, dispatchProjection] = useReducer(
-    (current: RealtimeConversationProjection, action: { type: 'reset' } | { type: 'snapshot'; value: Parameters<typeof projectRealtimeSnapshot>[0] } | { type: 'event'; value: Parameters<typeof projectRealtimeEvent>[1] }) => {
+    (current: RealtimeConversationProjection, action: { type: 'reset' } | { type: 'snapshot'; value: Parameters<typeof projectRealtimeSnapshot>[0] } | { type: 'event'; value: Parameters<typeof projectRealtimeEvent>[1] } | { type: 'worker.revision'; jobId: string; revision: number }) => {
       if (action.type === 'reset') return emptyRealtimeProjection;
+      if (action.type === 'worker.revision') return {
+        ...current,
+        workerJobs: {
+          ...current.workerJobs,
+          [action.jobId]: { ...current.workerJobs[action.jobId], revision: action.revision },
+        },
+      };
       return action.type === 'snapshot' ? projectRealtimeSnapshot(action.value) : projectRealtimeEvent(current, action.value);
     },
     emptyRealtimeProjection,
@@ -87,6 +102,8 @@ export function useRealtimeSession({
   const signatureRef = useRef('');
   const cursorRef = useRef<string | null>(null);
   const mutedRef = useRef(false);
+  const identity = `${target}|${conversationId}`;
+  const projectionIdentityRef = useRef(identity);
 
   const teardown = useCallback(() => {
     connectRef.current = null;
@@ -148,6 +165,11 @@ export function useRealtimeSession({
         sessionGeneration: session.session_generation,
         clientRequestId: realtimeRequestId('activate'),
       }, getToken),
+      releaseSession: (session) => closeRealtimeSession({
+        target,
+        sessionId: session.realtime_session_id,
+        clientRequestId: realtimeRequestId('close'),
+      }, getToken),
       // Feasibility proved the browser data channel is unnecessary. If introduced later,
       // RealtimeClient treats it as presentation-only and never as control authority.
       createUntrustedDataChannel: false,
@@ -169,7 +191,10 @@ export function useRealtimeSession({
           cursorRef.current = event.event_id;
           dispatchProjection({ type: 'event', value: event });
         },
-        onState: setControlState,
+        onState: (next) => {
+          setControlState(next);
+          if (next === 'ready') setStateDetail(undefined);
+        },
         onError: setStateDetail,
       });
       controlRef.current = control;
@@ -195,8 +220,9 @@ export function useRealtimeSession({
   useEffect(() => {
     setSuspended(false);
     cursorRef.current = null;
+    projectionIdentityRef.current = identity;
     dispatchProjection({ type: 'reset' });
-  }, [target, conversationId]);
+  }, [identity]);
 
   const close = useCallback(() => {
     setSuspended(true);
@@ -225,21 +251,22 @@ export function useRealtimeSession({
     if (!control?.isReady || !session) throw new Error('Hermes Realtime control is not ready');
     return { control, session };
   }, []);
-  const sendInput = useCallback((text: string) => {
+  const sendInput = useCallback(async (text: string) => {
     const { control, session } = requireControl();
-    control.input(realtimeRequestId('input'), text, session.session_generation);
+    await control.input(realtimeRequestId('input'), text, session.session_generation);
   }, [requireControl]);
-  const interruptSpeech = useCallback(() => {
+  const interruptSpeech = useCallback(async () => {
     const { control, session } = requireControl();
-    control.interrupt(realtimeRequestId('interrupt'), session.session_generation);
+    await control.interrupt(realtimeRequestId('interrupt'), session.session_generation);
   }, [requireControl]);
-  const resolveApproval = useCallback((approvalId: string, choice: string) => {
+  const resolveApproval = useCallback(async (approvalId: string, choice: string) => {
     const { control, session } = requireControl();
-    control.approval(realtimeRequestId('approval'), approvalId, choice, session.session_generation);
+    await control.approval(realtimeRequestId('approval'), approvalId, choice, session.session_generation);
   }, [requireControl]);
-  const workerCommand = useCallback((workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload: Record<string, unknown> = {}) => {
+  const workerCommand = useCallback(async (workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload: Record<string, unknown> = {}) => {
     const { control } = requireControl();
-    control.workerCommand(realtimeRequestId('worker'), workerJobId, operation, revision, payload);
+    const result = await control.workerCommand(realtimeRequestId('worker'), workerJobId, operation, revision, payload);
+    dispatchProjection({ type: 'worker.revision', jobId: workerJobId, revision: result.resulting_revision });
   }, [requireControl]);
 
   const state = useMemo<RealtimeSessionState>(() => {
@@ -261,7 +288,7 @@ export function useRealtimeSession({
     compatibility,
     mediaState,
     controlState,
-    projection,
+    projection: projectionForIdentity(projection, projectionIdentityRef.current, identity),
     connected: state === 'ready',
     muted,
     manualTurnTaking: turnMode === 'manual',
@@ -275,5 +302,5 @@ export function useRealtimeSession({
     interruptSpeech,
     resolveApproval,
     workerCommand,
-  }), [close, compatibility, connect, controlState, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, turnMode, workerCommand, interruptSpeech]);
+  }), [close, compatibility, connect, controlState, identity, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, turnMode, workerCommand, interruptSpeech]);
 }

@@ -12,6 +12,20 @@ describe('Realtime conversation projection', () => {
     expect(state.approvals.approval_1).toEqual(expect.objectContaining({ state: 'pending' }));
   });
 
+  it('normalizes the frozen Hermes transcript row shape', () => {
+    const state = projectRealtimeSnapshot({
+      conversation_id: 'hvc_1', last_event_id: 'rte_9',
+      transcript: [
+        { role: 'user', text: 'Build this', timestamp: 10 },
+        { role: 'assistant', text: 'I am on it', timestamp: 11 },
+      ],
+    });
+    expect(state.messages).toEqual([
+      { role: 'user', content: 'Build this' },
+      { role: 'assistant', content: 'I am on it' },
+    ]);
+  });
+
   it('deduplicates replayed event IDs while keeping entity-keyed worker state', () => {
     const initial = projectRealtimeSnapshot({ conversation_id: 'hvc_1', last_event_id: null });
     const event = { event_id: 'ev_1', type: 'worker.progress', conversation_id: 'hvc_1', payload: { worker_job_id: 'job_1', progress: 'halfway' } };

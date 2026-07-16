@@ -10,6 +10,21 @@ function text(value: unknown): string | undefined {
 function number(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
+function nestedText(value: unknown, key: string): string | undefined {
+  return value && typeof value === 'object' ? text((value as Record<string, unknown>)[key]) : undefined;
+}
+function completionSummary(value: unknown): string | undefined {
+  if (typeof value === 'string') return text(value);
+  if (!value || typeof value !== 'object') return undefined;
+  const completion = value as Record<string, unknown>;
+  const summary = text(completion.summary);
+  if (summary) return summary;
+  if (Array.isArray(completion.results)) {
+    const results = completion.results.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()));
+    return results.length ? results.join(' · ') : undefined;
+  }
+  return text(completion.result);
+}
 
 export function presentRealtimeJobs(
   session: RealtimeSessionController,
@@ -21,7 +36,9 @@ export function presentRealtimeJobs(
     const rawStatus = text(job.status);
     const status: WorkerJobStatus = rawStatus && JOB_STATUSES.has(rawStatus as WorkerJobStatus)
       ? rawStatus as WorkerJobStatus
-      : rawStatus === 'waiting_for_approval' ? 'awaiting_approval' : 'running';
+      : rawStatus === 'waiting_for_approval' ? 'awaiting_approval'
+        : ['failed', 'stalled', 'outcome_unknown'].includes(rawStatus ?? '') ? 'failed'
+          : ['cancelled', 'superseded'].includes(rawStatus ?? '') ? 'cancelled' : 'running';
     const attempts = Array.isArray(job.attempts) ? job.attempts.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : [];
     const latestAttempt = attempts.at(-1);
     const artifacts = (Array.isArray(job.artifacts) ? job.artifacts : [])
@@ -47,9 +64,9 @@ export function presentRealtimeJobs(
     if (progress !== undefined && progress <= 1) progress *= 100;
     return {
       id,
-      title: text(job.task) ?? text(job.title) ?? 'Delegated work',
+      title: text(job.task) ?? nestedText(job.task, 'goal') ?? text(job.title) ?? 'Delegated work',
       status,
-      summary: text(job.summary) ?? text(job.completion),
+      summary: text(job.summary) ?? completionSummary(job.completion),
       progress: progress === undefined ? undefined : Math.max(0, Math.min(100, progress)),
       queuePosition: number(job.queue_position),
       attempt: number(latestAttempt?.attempt_number) ?? (attempts.length || undefined),
@@ -73,4 +90,13 @@ export function realtimeReadiness(session: RealtimeSessionController): RealtimeP
     case 'blocked': return 'blocked';
     default: return 'disconnected';
   }
+}
+
+export function workerControlPayload(
+  operation: 'refine' | 'redirect' | 'cancel',
+  instruction = '',
+): Record<string, unknown> {
+  if (operation === 'refine') return { context: instruction };
+  if (operation === 'redirect') return { goal: instruction };
+  return {};
 }
