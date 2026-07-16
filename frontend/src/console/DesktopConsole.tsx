@@ -3,21 +3,26 @@ import { ApprovalModal } from '../components/ApprovalModal';
 import { TargetPicker } from '../components/TargetPicker';
 import { TranscriptPanel } from '../components/TranscriptPanel';
 import { VoiceControls } from '../components/VoiceControls';
+import { WorkerJobFeed } from '../components/WorkerJobFeed';
 import { StatusAnnouncer } from '../components/StatusAnnouncer';
 import { RunInspector } from './RunInspector';
 import { Composer } from './shared/Composer';
 import { ConsoleHeader } from './shared/ConsoleHeader';
+import { RealtimeStatusBar, RealtimeVoiceControls } from './shared/RealtimeStatusBar';
 import type { ConsoleController } from './useConsoleController';
 import { useCompactDesktop } from './useConsoleLayout';
+import type { RealtimePresentationModel } from './realtimePresentation';
 
 export function DesktopConsole({
   controller,
   accountControl,
   notice,
+  realtime,
 }: {
   controller: ConsoleController;
   accountControl?: ReactNode;
   notice?: ReactNode;
+  realtime?: RealtimePresentationModel;
 }) {
   const compact = useCompactDesktop();
   const bootstrap = controller.bootstrap;
@@ -25,9 +30,10 @@ export function DesktopConsole({
   const selected = bootstrap.targets.find((target) => target.name === controller.selectedTarget);
   return (
     <main className="shell desktop-console" data-console-shell="desktop" data-view-state={controller.viewState}>
-      <ConsoleHeader accountControl={accountControl} />
+      <ConsoleHeader accountControl={accountControl} realtime={realtime} />
       <StatusAnnouncer status={controller.viewState} />
       {notice}
+      <RealtimeStatusBar realtime={realtime} />
       <div className="desktop-command-grid">
         <aside className="session-rail card" aria-label="Conversations">
           <TargetPicker targets={bootstrap.targets} value={controller.selectedTarget} onChange={controller.selectTarget} />
@@ -64,22 +70,27 @@ export function DesktopConsole({
             </section>
           ) : null}
           <TranscriptPanel messages={controller.messages} response={controller.response} />
-          <Composer controller={controller} />
-          <VoiceControls
-            recording={controller.state.recording}
-            supported={controller.isCaptureSupported}
-            ready={Boolean(controller.selectedTarget && controller.sessionKey)}
-            speakReplies={controller.speakReplies}
-            onSpeakReplies={controller.setSpeakReplies}
-            onStart={controller.startRecording}
-            onStop={controller.stopRecording}
-            onCancelSpeech={controller.cancelSpeech}
-            inputLevel={controller.inputLevel}
-            elapsed={controller.recordingElapsed}
-            maxSeconds={bootstrap.voice.max_recording_seconds}
-            speechFallbackAvailable={controller.speechFallbackAvailable}
-            onRetrySpeech={controller.retrySpeech}
-          />
+          <WorkerJobFeed realtime={realtime} />
+          <Composer controller={controller} realtime={realtime} />
+          {realtime?.mode === 'realtime' ? (
+            <RealtimeVoiceControls realtime={realtime} />
+          ) : (
+            <VoiceControls
+              recording={controller.state.recording}
+              supported={controller.isCaptureSupported}
+              ready={Boolean(controller.selectedTarget && controller.sessionKey)}
+              speakReplies={controller.speakReplies}
+              onSpeakReplies={controller.setSpeakReplies}
+              onStart={controller.startRecording}
+              onStop={controller.stopRecording}
+              onCancelSpeech={controller.cancelSpeech}
+              inputLevel={controller.inputLevel}
+              elapsed={controller.recordingElapsed}
+              maxSeconds={bootstrap.voice.max_recording_seconds}
+              speechFallbackAvailable={controller.speechFallbackAvailable}
+              onRetrySpeech={controller.retrySpeech}
+            />
+          )}
         </section>
 
         {compact ? (

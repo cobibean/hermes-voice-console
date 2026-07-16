@@ -3,19 +3,24 @@ import { ApprovalModal } from '../components/ApprovalModal';
 import { TargetPicker } from '../components/TargetPicker';
 import { TranscriptPanel } from '../components/TranscriptPanel';
 import { VoiceControls } from '../components/VoiceControls';
+import { WorkerJobFeed } from '../components/WorkerJobFeed';
 import { StatusAnnouncer } from '../components/StatusAnnouncer';
 import { ActivitySheet } from './ActivitySheet';
 import { Composer } from './shared/Composer';
+import { RealtimeStatusBar, RealtimeVoiceControls } from './shared/RealtimeStatusBar';
 import type { ConsoleController } from './useConsoleController';
+import type { RealtimePresentationModel } from './realtimePresentation';
 
 export function MobileConsole({
   controller,
   accountControl,
   notice,
+  realtime,
 }: {
   controller: ConsoleController;
   accountControl?: ReactNode;
   notice?: ReactNode;
+  realtime?: RealtimePresentationModel;
 }) {
   const bootstrap = controller.bootstrap;
   if (!bootstrap) return null;
@@ -30,6 +35,7 @@ export function MobileConsole({
       </header>
       <StatusAnnouncer status={controller.viewState} />
       {notice}
+      <RealtimeStatusBar realtime={realtime} />
       <details className="mobile-settings card">
         <summary>Agent and conversation</summary>
         <TargetPicker targets={bootstrap.targets} value={controller.selectedTarget} onChange={controller.selectTarget} />
@@ -50,28 +56,33 @@ export function MobileConsole({
       ) : null}
       <section className="mobile-conversation">
         <TranscriptPanel messages={controller.messages} response={controller.response} />
+        <WorkerJobFeed realtime={realtime} />
         <p className="ai-voice-disclosure mobile-ai-disclosure">Spoken replies use an AI-generated voice.</p>
       </section>
       <details className="mobile-activity card">
         <summary>Activity and diagnostics</summary>
         <ActivitySheet controller={controller} />
       </details>
-      <VoiceControls
-        recording={controller.state.recording}
-        supported={controller.isCaptureSupported}
-        ready={Boolean(controller.selectedTarget && controller.sessionKey)}
-        speakReplies={controller.speakReplies}
-        onSpeakReplies={controller.setSpeakReplies}
-        onStart={controller.startRecording}
-        onStop={controller.stopRecording}
-        onCancelSpeech={controller.cancelSpeech}
-        inputLevel={controller.inputLevel}
-        elapsed={controller.recordingElapsed}
-        maxSeconds={bootstrap.voice.max_recording_seconds}
-        speechFallbackAvailable={controller.speechFallbackAvailable}
-        onRetrySpeech={controller.retrySpeech}
-      />
-      <div className="mobile-composer-dock"><Composer controller={controller} compact /></div>
+      {realtime?.mode === 'realtime' ? (
+        <RealtimeVoiceControls realtime={realtime} />
+      ) : (
+        <VoiceControls
+          recording={controller.state.recording}
+          supported={controller.isCaptureSupported}
+          ready={Boolean(controller.selectedTarget && controller.sessionKey)}
+          speakReplies={controller.speakReplies}
+          onSpeakReplies={controller.setSpeakReplies}
+          onStart={controller.startRecording}
+          onStop={controller.stopRecording}
+          onCancelSpeech={controller.cancelSpeech}
+          inputLevel={controller.inputLevel}
+          elapsed={controller.recordingElapsed}
+          maxSeconds={bootstrap.voice.max_recording_seconds}
+          speechFallbackAvailable={controller.speechFallbackAvailable}
+          onRetrySpeech={controller.retrySpeech}
+        />
+      )}
+      <div className="mobile-composer-dock"><Composer controller={controller} compact realtime={realtime} /></div>
       <ApprovalModal approval={controller.approval} onResolve={controller.resolveApproval} />
     </main>
   );

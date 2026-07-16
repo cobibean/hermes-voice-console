@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { useRef, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { initialConsoleState } from '../lib/state';
@@ -7,6 +7,7 @@ import { MobileConsole } from './MobileConsole';
 import type { ConsoleController } from './useConsoleController';
 import { useConsoleLayout } from './useConsoleLayout';
 import { deriveConsoleViewState } from './viewState';
+import type { RealtimePresentationModel } from './realtimePresentation';
 
 function LayoutHarness() {
   const layout = useConsoleLayout();
@@ -66,6 +67,16 @@ describe('console architecture seams', () => {
     viewState: 'ready',
   } as unknown as ConsoleController;
 
+  const realtime = {
+    mode: 'realtime',
+    connection: 'live',
+    muted: false,
+    manualTurnTaking: false,
+    listening: false,
+    speaking: false,
+    jobs: [{ id: 'job-1', title: 'Background implementation', status: 'running' }],
+  } satisfies RealtimePresentationModel;
+
   it('derives one explicit visual state from transport state', () => {
     expect(deriveConsoleViewState(initialConsoleState, false)).toBe('disconnected');
     expect(deriveConsoleViewState(initialConsoleState, true)).toBe('ready');
@@ -116,14 +127,31 @@ describe('console architecture seams', () => {
   });
 
   it('renders intentionally different desktop and mobile information architecture', () => {
-    const desktop = render(<DesktopConsole controller={controller} />);
+    const desktop = render(<DesktopConsole controller={controller} realtime={realtime} />);
     expect(screen.getByRole('complementary', { name: 'Conversations' })).toBeInTheDocument();
     expect(screen.getByTestId('run-inspector')).toBeInTheDocument();
+    expect(screen.getByLabelText('Conversation mode')).toHaveTextContent('Realtime');
+    expect(screen.getByLabelText('Delegated tasks')).toHaveTextContent('Background implementation');
     desktop.unmount();
 
-    render(<MobileConsole controller={controller} />);
+    render(<MobileConsole controller={controller} realtime={realtime} />);
     expect(screen.getByText('Agent and conversation')).toBeInTheDocument();
     expect(screen.getByText('Activity and diagnostics')).toBeInTheDocument();
     expect(screen.getByLabelText('Message composer')).toHaveClass('composer-mobile');
+    expect(screen.getByLabelText('Conversation mode')).toHaveTextContent('Realtime');
+    expect(screen.getByLabelText('Delegated tasks')).toHaveTextContent('Background implementation');
+  });
+
+  it('keeps the composer available while realtime work runs', () => {
+    const runningController = {
+      ...controller,
+      state: { ...controller.state, agent: 'running' },
+    } as ConsoleController;
+    const view = render(<DesktopConsole controller={runningController} />);
+    expect(within(view.container).getByLabelText('Message to agent')).toBeDisabled();
+    const { rerender } = view;
+    rerender(<DesktopConsole controller={runningController} realtime={realtime} />);
+    expect(within(view.container).getByLabelText('Message to agent')).toBeEnabled();
+    expect(within(view.container).getByLabelText('Message to agent')).toHaveAttribute('placeholder', 'Keep talking to Hermes…');
   });
 });
