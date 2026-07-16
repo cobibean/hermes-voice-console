@@ -14,23 +14,20 @@ Product hierarchy remains the priority:
 
 ## Evidence
 
-Baseline:
+Every final image is a viewport capture, not a full-page capture. This matters for fixed composer, voice-control, and modal placement. The PNG dimensions exactly match the browser viewport used for the scenario.
 
-- `baseline/desktop-initial.png`
-- `baseline/mobile-initial.png`
-
-Final:
-
-- `final/desktop-initial.png`
-- `final/mobile-initial.png`
-- `final/landscape-mobile-initial.png`
-- `final/desktop-realtime-approval-worker.png`
-- `final/desktop-realtime-live-worker.png`
-- `final/desktop-realtime-live-conversation.png`
-- `final/desktop-realtime-completed-artifact.png`
-- `final/desktop-realtime-recovery.png`
-- `final/mobile-realtime-approval.png`
-- `final/mobile-realtime-manual-capture.png`
+| Capture | Viewport | State truth |
+| --- | ---: | --- |
+| `final/desktop-initial.png` | 1440×1000 | Real local legacy fixture |
+| `final/mobile-initial.png` | 390×844 | Real local legacy fixture |
+| `final/landscape-mobile-initial.png` | 844×390 | Real local legacy fixture |
+| `final/desktop-realtime-approval-worker.png` | 1440×1000 | Real local fake-contract Realtime approval and worker state; deterministic browser media peer |
+| `final/desktop-realtime-live-worker.png` | 1440×1200 | Real local fake-contract active worker; approval layer hidden to inspect the underlying workspace |
+| `final/desktop-realtime-live-conversation.png` | 1440×1300 | Deterministic conversation projection on the real Realtime shell |
+| `final/desktop-realtime-completed-artifact.png` | 1440×1400 | Deterministic terminal job/artifact projection on the real Realtime shell |
+| `final/desktop-realtime-recovery.png` | 1440×900 | Real failed-peer recovery state |
+| `final/mobile-realtime-approval.png` | 390×844 | Real local fake-contract approval state; deterministic browser media peer |
+| `final/mobile-realtime-manual-capture.png` | 390×844 | Production controls with the fake target turn-mode endpoint |
 
 Reference:
 
@@ -38,4 +35,4 @@ Reference:
 
 The Realtime approval capture uses the real local fake-contract state and production presentation components. Only the browser media peer is replaced with a deterministic in-page peer because the local fake target intentionally returns non-media SDP.
 
-The live-conversation and completed-artifact captures are visual projection fixtures layered onto that same real Realtime shell. Their copy and terminal job state are deterministic presentation data, not evidence that the fake target performed the described release audit. The recovery capture is a real failed-peer state; the manual-capture image uses the production controls and fake target turn-mode endpoint.
+The live-conversation and completed-artifact captures are visual projection fixtures layered onto that same real Realtime shell. Their copy and terminal job state are deterministic presentation data, not evidence that the fake target performed the described release audit. The table above is the source of truth for screenshot provenance.

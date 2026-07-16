@@ -37,14 +37,26 @@ test('presents the Hermes research-console identity at desktop and mobile sizes'
   const desktopVisuals = await desktop.page.evaluate(() => {
     const heading = document.querySelector<HTMLElement>('.hero h1');
     const card = document.querySelector<HTMLElement>('.card');
+    const root = getComputedStyle(document.documentElement);
+    const luminance = (value: string) => {
+      const channels = value.match(/[0-9a-f]{2}/gi)?.map((channel) => parseInt(channel, 16) / 255) ?? [];
+      const linear = channels.map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4);
+      return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2];
+    };
+    const operational = root.getPropertyValue('--operational-muted').trim();
+    const surface = root.getPropertyValue('--surface-solid').trim();
+    const lighter = Math.max(luminance(operational), luminance(surface));
+    const darker = Math.min(luminance(operational), luminance(surface));
     return {
       headingFamily: heading ? getComputedStyle(heading).fontFamily : '',
       cardBorder: card ? getComputedStyle(card).borderTopStyle : '',
+      operationalContrast: (lighter + .05) / (darker + .05),
       overflow: document.documentElement.scrollWidth <= window.innerWidth,
     };
   });
   expect(desktopVisuals.headingFamily).toContain('Iowan Old Style');
   expect(desktopVisuals.cardBorder).toBe('solid');
+  expect(desktopVisuals.operationalContrast).toBeGreaterThanOrEqual(5);
   expect(desktopVisuals.overflow).toBe(true);
   await desktop.context.close();
 
