@@ -6,7 +6,9 @@ import type {
   RealtimeApprovalResult,
   RealtimeInputResult,
   RealtimeInterruptResult,
+  RealtimeManualAudioCommitResult,
   RealtimeSnapshot,
+  RealtimeTurnModeResult,
   RealtimeWorkerCommandResult,
 } from './realtimeTypes';
 
@@ -27,7 +29,7 @@ export interface RealtimeControlOptions {
 }
 
 type Command = Record<string, unknown> & { type: string; client_request_id: string };
-type ResultKind = 'input' | 'interrupt' | 'approval' | 'worker';
+type ResultKind = 'input' | 'interrupt' | 'approval' | 'manual_audio_commit' | 'turn_mode_update' | 'worker';
 interface PendingCommand {
   kind: ResultKind;
   command: Command;
@@ -215,6 +217,30 @@ export class RealtimeControlClient {
     if (kind === 'input' && (result.accepted !== true || result.state !== 'accepted')) throw new Error('Hermes rejected the typed input');
     if (kind === 'interrupt' && (result.interrupted !== true || result.state !== 'accepted' || result.realtime_session_id !== this.options.sessionId)) throw new Error('Hermes rejected the speech interruption');
     if (kind === 'approval' && (typeof result.accepted !== 'boolean' || !['resolved', 'denied'].includes(String(result.state)) || result.approval_id !== command.approval_id)) throw new Error('Hermes returned an invalid approval acknowledgement');
+    if (kind === 'manual_audio_commit') {
+      if (['in_progress', 'outcome_unknown'].includes(String(result.state))) {
+        if (result.accepted !== false || (result.operation !== undefined && result.operation !== kind)) throw new Error('Hermes returned an invalid manual audio acknowledgement');
+      } else if (result.state === 'rejected') {
+        const error = result.error;
+        if (result.accepted !== false || result.operation !== kind || !error || typeof error !== 'object' || (error as Record<string, unknown>).code !== 'audio_buffer_empty') throw new Error('Hermes returned an invalid empty audio acknowledgement');
+      } else if (
+        result.state !== 'accepted'
+        || result.realtime_session_id !== this.options.sessionId
+        || result.session_generation !== command.session_generation
+        || result.audio_commit_requested !== true
+        || result.response_requested !== true
+      ) throw new Error('Hermes returned an invalid manual audio acknowledgement');
+    }
+    if (kind === 'turn_mode_update') {
+      if (['in_progress', 'outcome_unknown'].includes(String(result.state))) {
+        if (result.accepted !== false || (result.operation !== undefined && result.operation !== kind)) throw new Error('Hermes returned an invalid turn mode acknowledgement');
+      } else if (
+        result.state !== 'accepted'
+        || result.realtime_session_id !== this.options.sessionId
+        || result.session_generation !== command.session_generation
+        || result.turn_mode !== command.turn_mode
+      ) throw new Error('Hermes returned an invalid turn mode acknowledgement');
+    }
     if (kind === 'worker') {
       const acknowledgements = new Set([
         'applied', 'already_applied', 'rejected_wrong_owner', 'rejected_terminal',
@@ -277,6 +303,12 @@ export class RealtimeControlClient {
   }
   async approval(clientRequestId: string, approvalId: string, choice: string, sessionGeneration: number): Promise<RealtimeApprovalResult> {
     return await this.send({ type: 'approval', client_request_id: clientRequestId, approval_id: approvalId, choice, session_generation: sessionGeneration }, 'approval') as unknown as RealtimeApprovalResult;
+  }
+  async manualAudioCommit(clientRequestId: string, sessionGeneration: number): Promise<RealtimeManualAudioCommitResult> {
+    return await this.send({ type: 'manual_audio_commit', client_request_id: clientRequestId, session_generation: sessionGeneration }, 'manual_audio_commit') as unknown as RealtimeManualAudioCommitResult;
+  }
+  async turnModeUpdate(clientRequestId: string, sessionGeneration: number, turnMode: 'automatic' | 'manual'): Promise<RealtimeTurnModeResult> {
+    return await this.send({ type: 'turn_mode_update', client_request_id: clientRequestId, session_generation: sessionGeneration, turn_mode: turnMode }, 'turn_mode_update') as unknown as RealtimeTurnModeResult;
   }
   async workerCommand(
     clientRequestId: string,

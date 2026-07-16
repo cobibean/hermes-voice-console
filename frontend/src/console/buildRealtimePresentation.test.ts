@@ -8,7 +8,9 @@ function session(overrides: Partial<RealtimeSessionController> = {}): RealtimeSe
     state: 'ready', compatibility: null, mediaState: 'connected', controlState: 'ready', connected: true,
     stateDetail: undefined, muted: false, manualTurnTaking: false, projection: emptyRealtimeProjection,
     connect: async () => undefined, close: () => undefined, setMuted: () => undefined,
-    setManualTurnTaking: () => undefined, startManualTurn: () => undefined, stopManualTurn: () => undefined,
+    manualControlsAvailable: false, setManualTurnTaking: async () => undefined,
+    startManualTurn: () => undefined, stopManualTurn: () => undefined, discardManualTurn: () => undefined,
+    commitManualTurn: async () => undefined,
     sendInput: async () => undefined, interruptSpeech: async () => undefined, resolveApproval: async () => undefined,
     submittingApprovalId: null, workerCommand: async () => undefined, ...overrides,
   };

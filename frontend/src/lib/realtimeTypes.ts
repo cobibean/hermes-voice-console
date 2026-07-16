@@ -56,6 +56,26 @@ export type RealtimeControlFrame =
 export interface RealtimeInputResult { client_request_id: string; accepted: true; state: 'accepted' }
 export interface RealtimeInterruptResult extends RealtimeInputResult { realtime_session_id: string; interrupted: true }
 export interface RealtimeApprovalResult { client_request_id: string; approval_id: string; accepted: boolean; state: 'resolved' | 'denied' }
+export interface RealtimeManualAudioCommitResult {
+  client_request_id: string;
+  operation?: 'manual_audio_commit';
+  state: 'accepted' | 'rejected' | 'in_progress' | 'outcome_unknown';
+  accepted?: boolean;
+  realtime_session_id?: string;
+  session_generation?: number;
+  audio_commit_requested?: true;
+  response_requested?: true;
+  error?: { code: 'audio_buffer_empty' };
+}
+export interface RealtimeTurnModeResult {
+  client_request_id: string;
+  operation?: 'turn_mode_update';
+  state: 'accepted' | 'in_progress' | 'outcome_unknown';
+  accepted?: boolean;
+  realtime_session_id?: string;
+  session_generation?: number;
+  turn_mode?: 'automatic' | 'manual';
+}
 export interface RealtimeWorkerCommandResult {
   command_id: string;
   worker_job_id: string;

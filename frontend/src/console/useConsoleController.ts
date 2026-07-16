@@ -433,18 +433,22 @@ export function useConsoleController({
     if (!turnId || state.recording === 'idle') return;
     stopRequestedRef.current = true;
     dispatch({ type: 'recording.stop' });
-    if (transport === 'realtime') realtimeSession.stopManualTurn();
+    if (transport === 'realtime') {
+      realtimeSession.stopManualTurn();
+      void realtimeSession.commitManualTurn()
+        .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
+    }
     else legacySession.stopRecording(turnId);
-  }, [legacySession.stopRecording, realtimeSession.stopManualTurn, state.activeTurnId, state.recording, transport]);
+  }, [legacySession.stopRecording, realtimeSession.commitManualTurn, realtimeSession.stopManualTurn, state.activeTurnId, state.recording, transport]);
 
   const discardRecording = useCallback(() => {
     const turnId = activeTurnIdRef.current ?? state.activeTurnId;
     discardRequestedRef.current = true;
     stopRequestedRef.current = false;
     dispatch({ type: 'recording.discard' });
-    if (transport === 'realtime') realtimeSession.stopManualTurn();
+    if (transport === 'realtime') realtimeSession.discardManualTurn();
     else if (turnId) legacySession.discardRecording(turnId);
-  }, [legacySession.discardRecording, realtimeSession.stopManualTurn, state.activeTurnId, transport]);
+  }, [legacySession.discardRecording, realtimeSession.discardManualTurn, state.activeTurnId, transport]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -572,6 +576,12 @@ export function useConsoleController({
     void realtimeSession.workerCommand(jobId, operation, revision, payload)
       .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
   };
+  const sendManualTurn = useCallback(() => {
+    realtimeSession.stopManualTurn();
+    if (state.recording !== 'idle') dispatch({ type: 'recording.stop' });
+    void realtimeSession.commitManualTurn()
+      .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
+  }, [realtimeSession.commitManualTurn, realtimeSession.stopManualTurn, state.recording]);
   const realtime = useMemo<RealtimePresentationModel>(() => ({
     mode: transport,
     readiness: transport === 'legacy' ? 'disconnected' : realtimeReadiness(realtimeSession),
@@ -584,9 +594,17 @@ export function useConsoleController({
     jobs: presentRealtimeJobs(realtimeSession, artifactAllowedOrigins),
     artifactAllowedOrigins,
     onToggleMute: transport === 'realtime' ? () => realtimeSession.setMuted(!realtimeSession.muted) : undefined,
-    // Manual audio commit remains disabled until the server-authoritative commit command is available.
-    onToggleManualTurnTaking: undefined,
-    onSendManualTurn: undefined,
+    onToggleManualTurnTaking: transport === 'realtime' && realtimeSession.manualControlsAvailable
+      ? () => {
+        void realtimeSession.setManualTurnTaking(!realtimeSession.manualTurnTaking)
+          .catch((error: unknown) => dispatch({ type: 'error', message: (error as Error).message }));
+      }
+      : undefined,
+    onSendManualTurn: transport === 'realtime'
+      && realtimeSession.manualControlsAvailable
+      && realtimeSession.manualTurnTaking
+      ? sendManualTurn
+      : undefined,
     onInterrupt: transport === 'realtime' ? cancelSpeech : undefined,
     onEndCall: transport === 'realtime' ? realtimeSession.close : undefined,
     onReconnect: transport === 'realtime' ? () => { void realtimeSession.connect().catch(dispatchError); } : undefined,
@@ -604,7 +622,7 @@ export function useConsoleController({
       if (instruction) runWorkerCommand(jobId, 'redirect', workerControlPayload('redirect', instruction));
     } : undefined,
     onCancel: transport === 'realtime' ? (jobId) => runWorkerCommand(jobId, 'cancel') : undefined,
-  }), [cancelSpeech, dispatchError, realtimeSession, setTransport, transport]);
+  }), [cancelSpeech, dispatchError, realtimeSession, sendManualTurn, setTransport, transport]);
 
   return useMemo(() => ({
     acceptanceUnknown,

@@ -56,6 +56,26 @@ describe('RealtimeControlClient', () => {
     sockets[0].json({ type: 'ack', client_request_id: 'approval-request-1', result: { client_request_id: 'approval-request-1', approval_id: 'approval_1', accepted: true, state: 'resolved' } });
     await expect(approval).resolves.toEqual(expect.objectContaining({ approval_id: 'approval_1' }));
 
+    const mode = client.turnModeUpdate('turn-mode-1', 2, 'manual');
+    expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({
+      type: 'turn_mode_update', client_request_id: 'turn-mode-1', session_generation: 2, turn_mode: 'manual',
+    });
+    sockets[0].json({ type: 'ack', client_request_id: 'turn-mode-1', result: {
+      client_request_id: 'turn-mode-1', realtime_session_id: 'rt_1', session_generation: 2,
+      turn_mode: 'manual', state: 'accepted',
+    } });
+    await expect(mode).resolves.toEqual(expect.objectContaining({ turn_mode: 'manual', state: 'accepted' }));
+
+    const commit = client.manualAudioCommit('manual-commit-1', 2);
+    expect(JSON.parse(sockets[0].sent.at(-1)!)).toEqual({
+      type: 'manual_audio_commit', client_request_id: 'manual-commit-1', session_generation: 2,
+    });
+    sockets[0].json({ type: 'ack', client_request_id: 'manual-commit-1', result: {
+      client_request_id: 'manual-commit-1', realtime_session_id: 'rt_1', session_generation: 2,
+      state: 'accepted', audio_commit_requested: true, response_requested: true,
+    } });
+    await expect(commit).resolves.toEqual(expect.objectContaining({ state: 'accepted', response_requested: true }));
+
     const worker = client.workerCommand('worker-command-1', 'job_1', 'refine', 3, { context: 'Use the safer path' });
     sockets[0].json({ type: 'ack', client_request_id: 'worker-command-1', result: {
       command_id: 'worker-command-1', worker_job_id: 'job_1', operation: 'refine',
@@ -76,6 +96,34 @@ describe('RealtimeControlClient', () => {
       acknowledgement: 'already_applied', revision: 5, control_signal_sent: true,
     } });
     await expect(cancel).resolves.toEqual(expect.objectContaining({ revision: 5, acknowledgement: 'already_applied' }));
+    client.close();
+  });
+
+  it('returns typed empty-buffer and outcome-unknown manual acknowledgements without retrying', async () => {
+    const socket = new FakeSocket();
+    const client = new RealtimeControlClient({
+      getToken: vi.fn(async () => null), target: 'fake', conversationId: 'hvc_1', sessionId: 'rt_1',
+      onSnapshot: vi.fn(), onEvent: vi.fn(), createSocket: () => socket as unknown as WebSocket, reconnect: false,
+    });
+    const connected = client.connect(); socket.emit('open'); await Promise.resolve();
+    socket.json({ type: 'auth.ok', principal_kind: 'development', expires_at: null });
+    socket.json({ type: 'snapshot', snapshot: { conversation_id: 'hvc_1', last_event_id: null } });
+    socket.json({ type: 'subscribed', realtime_session_id: 'rt_1', after: null, cursor_rebased: false });
+    await connected;
+
+    const empty = client.manualAudioCommit('manual-empty-1', 1);
+    socket.json({ type: 'ack', client_request_id: 'manual-empty-1', result: {
+      client_request_id: 'manual-empty-1', operation: 'manual_audio_commit', state: 'rejected',
+      accepted: false, error: { code: 'audio_buffer_empty' },
+    } });
+    await expect(empty).resolves.toEqual(expect.objectContaining({ state: 'rejected' }));
+
+    const unknown = client.manualAudioCommit('manual-unknown-1', 1);
+    socket.json({ type: 'ack', client_request_id: 'manual-unknown-1', result: {
+      client_request_id: 'manual-unknown-1', operation: 'manual_audio_commit', state: 'outcome_unknown', accepted: false,
+    } });
+    await expect(unknown).resolves.toEqual(expect.objectContaining({ state: 'outcome_unknown' }));
+    expect(socket.sent.filter((value) => JSON.parse(value).client_request_id === 'manual-unknown-1')).toHaveLength(1);
     client.close();
   });
 

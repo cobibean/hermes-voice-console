@@ -44,17 +44,34 @@ export interface RealtimeSessionController {
   connected: boolean;
   muted: boolean;
   manualTurnTaking: boolean;
+  manualControlsAvailable: boolean;
   connect: () => Promise<void>;
   close: () => void;
   setMuted: (muted: boolean) => void;
-  setManualTurnTaking: (manual: boolean) => void;
+  setManualTurnTaking: (manual: boolean) => Promise<void>;
   startManualTurn: () => void;
   stopManualTurn: () => void;
+  discardManualTurn: () => void;
+  commitManualTurn: () => Promise<void>;
   sendInput: (text: string) => Promise<void>;
   interruptSpeech: () => Promise<void>;
   resolveApproval: (approvalId: string, choice: string) => Promise<void>;
   submittingApprovalId: string | null;
   workerCommand: (workerJobId: string, operation: 'refine' | 'redirect' | 'cancel', revision: number, payload?: Record<string, unknown>) => Promise<void>;
+}
+
+export function supportsManualTurnControls(compatibility: RealtimeCompatibility | null): boolean {
+  // `compatible` is the backend proof that the required commit/turn-mode endpoint keys exist.
+  // The retained contract then proves the matching session capabilities and modes.
+  if (!compatibility?.compatible) return false;
+  const sessions = compatibility.contract.sessions;
+  if (!sessions || typeof sessions !== 'object' || Array.isArray(sessions)) return false;
+  const contract = sessions as Record<string, unknown>;
+  return contract.manual_audio_commit === true
+    && contract.turn_mode_update === true
+    && Array.isArray(contract.turn_modes)
+    && contract.turn_modes.includes('server_vad')
+    && contract.turn_modes.includes('manual');
 }
 
 export function projectionForIdentity(
@@ -104,8 +121,28 @@ export function useRealtimeSession({
   const signatureRef = useRef('');
   const cursorRef = useRef<string | null>(null);
   const mutedRef = useRef(false);
+  const turnModeRef = useRef<RealtimeTurnMode>('server_vad');
   const identity = `${target}|${conversationId}`;
   const projectionIdentityRef = useRef(identity);
+  const modeIdentityRef = useRef(identity);
+  const operationEpochRef = useRef(0);
+  const modeRequestRef = useRef<{
+    epoch: number;
+    identity: string;
+    sessionId: string;
+    generation: number;
+    manual: boolean;
+    promise: Promise<void>;
+  } | null>(null);
+  const manualTurnRef = useRef<{
+    epoch: number;
+    identity: string;
+    sessionId: string;
+    generation: number;
+    clientRequestId: string;
+    state: 'capturing' | 'committing' | 'complete' | 'failed';
+    promise?: Promise<void>;
+  } | null>(null);
   const approvalRequestRef = useRef<{
     approvalId: string;
     clientRequestId: string;
@@ -113,10 +150,14 @@ export function useRealtimeSession({
   } | null>(null);
 
   const teardown = useCallback(() => {
+    operationEpochRef.current += 1;
+    modeRequestRef.current = null;
+    manualTurnRef.current = null;
     connectRef.current = null;
     controlRef.current?.close();
     controlRef.current = null;
     const client = mediaRef.current;
+    client?.setMuted(true);
     mediaRef.current = null;
     const session = client?.close();
     if (session && target) {
@@ -152,11 +193,12 @@ export function useRealtimeSession({
     if (!target || !conversationId) throw new Error('Select a target and conversation first');
     if (!compatibility?.compatible) throw new Error(stateDetail ?? 'Realtime compatibility preflight has not passed');
     setSuspended(false);
-    const signature = `${target}|${conversationId}|${turnMode}`;
+    const signature = identity;
     if (signatureRef.current === signature && mediaRef.current?.isConnected && controlRef.current?.isReady) return;
     if (connectRef.current && signatureRef.current === signature) return connectRef.current;
     teardown();
     signatureRef.current = signature;
+    const initialTurnMode = turnModeRef.current;
     const media = new RealtimeClient({
       onState: setMediaState,
       exchangeSdp: (sdpOffer) => createRealtimeSession({
@@ -164,7 +206,7 @@ export function useRealtimeSession({
         conversationId,
         sdpOffer,
         clientRequestId: realtimeRequestId('create'),
-        turnMode,
+        turnMode: initialTurnMode,
       }, getToken),
       activate: (session) => activateRealtimeSession({
         target,
@@ -206,7 +248,7 @@ export function useRealtimeSession({
       });
       controlRef.current = control;
       await control.connect();
-      if (turnMode === 'manual' || mutedRef.current) media.setMuted(true);
+      if (turnModeRef.current === 'manual' || mutedRef.current) media.setMuted(true);
     }).catch((error: unknown) => {
       setStateDetail((error as Error).message);
       throw error;
@@ -215,7 +257,7 @@ export function useRealtimeSession({
     });
     connectRef.current = promise;
     return promise;
-  }, [compatibility?.compatible, conversationId, enabled, getToken, stateDetail, target, teardown, turnMode]);
+  }, [compatibility?.compatible, conversationId, enabled, getToken, identity, stateDetail, target, teardown]);
 
   useEffect(() => {
     if (!enabled || suspended || !compatibility?.compatible || !conversationId) return undefined;
@@ -228,6 +270,9 @@ export function useRealtimeSession({
     setSuspended(false);
     cursorRef.current = null;
     projectionIdentityRef.current = identity;
+    modeIdentityRef.current = identity;
+    turnModeRef.current = 'server_vad';
+    setTurnMode('server_vad');
     dispatchProjection({ type: 'reset' });
   }, [identity]);
 
@@ -248,25 +293,166 @@ export function useRealtimeSession({
   const setMuted = useCallback((value: boolean) => {
     mutedRef.current = value;
     setMutedState(value);
-    mediaRef.current?.setMuted(value || turnMode === 'manual');
-  }, [turnMode]);
-  const setManualTurnTaking = useCallback((manual: boolean) => {
-    if ((manual ? 'manual' : 'server_vad') === turnMode) return;
-    setTurnMode(manual ? 'manual' : 'server_vad');
-    teardown();
-  }, [teardown, turnMode]);
-  const startManualTurn = useCallback(() => {
-    if (turnMode === 'manual' && !muted) mediaRef.current?.setMuted(false);
-  }, [muted, turnMode]);
-  const stopManualTurn = useCallback(() => {
-    if (turnMode === 'manual') mediaRef.current?.setMuted(true);
-  }, [turnMode]);
+    mediaRef.current?.setMuted(value || turnModeRef.current === 'manual');
+  }, []);
   const requireControl = useCallback(() => {
     const control = controlRef.current;
     const session = mediaRef.current?.activeSession;
-    if (!control?.isReady || !session) throw new Error('Hermes Realtime control is not ready');
+    if (
+      !control?.isReady
+      || !session
+      || signatureRef.current !== identity
+      || session.conversation_id !== conversationId
+    ) throw new Error('Hermes Realtime control is not ready for this conversation');
     return { control, session };
+  }, [conversationId, identity]);
+  const setManualTurnTaking = useCallback((manual: boolean): Promise<void> => {
+    if (!supportsManualTurnControls(compatibility)) {
+      return Promise.reject(new Error('This Hermes target does not support server-authoritative manual turns'));
+    }
+    let required: ReturnType<typeof requireControl>;
+    try { required = requireControl(); }
+    catch (error) { return Promise.reject(error); }
+    const { control, session } = required;
+    const effectiveManual = modeIdentityRef.current === identity && turnModeRef.current === 'manual';
+    if (manual === effectiveManual) return Promise.resolve();
+    const epoch = operationEpochRef.current;
+    const existing = modeRequestRef.current;
+    if (existing) {
+      if (
+        existing.epoch === epoch
+        && existing.identity === identity
+        && existing.sessionId === session.realtime_session_id
+        && existing.generation === session.session_generation
+        && existing.manual === manual
+      ) return existing.promise;
+      return Promise.reject(new Error('Another Hermes turn mode change is already pending'));
+    }
+    const clientRequestId = realtimeRequestId('turn-mode');
+    if (manual) mediaRef.current?.setMuted(true);
+    const promise = control.turnModeUpdate(
+      clientRequestId,
+      session.session_generation,
+      manual ? 'manual' : 'automatic',
+    ).then((result) => {
+      if (result.state === 'outcome_unknown' || result.state === 'in_progress') {
+        throw new Error('Hermes could not confirm the turn mode change. The current mode was kept and the request will not be retried automatically.');
+      }
+      if (
+        operationEpochRef.current !== epoch
+        || signatureRef.current !== identity
+        || mediaRef.current?.activeSession?.realtime_session_id !== session.realtime_session_id
+        || mediaRef.current.activeSession.session_generation !== session.session_generation
+      ) throw new Error('The turn mode change belonged to a previous Realtime session');
+      turnModeRef.current = manual ? 'manual' : 'server_vad';
+      modeIdentityRef.current = identity;
+      setTurnMode(turnModeRef.current);
+      manualTurnRef.current = null;
+      mediaRef.current?.setMuted(manual || mutedRef.current);
+    }).catch((error: unknown) => {
+      if (operationEpochRef.current === epoch) {
+        // A failed or ambiguous mode mutation can have crossed the server boundary.
+        // Fail locally muted until the user explicitly recovers or changes mode again.
+        mutedRef.current = true;
+        setMutedState(true);
+        mediaRef.current?.setMuted(true);
+        setStateDetail((error as Error).message);
+      }
+      throw error;
+    }).finally(() => {
+      if (modeRequestRef.current?.promise === promise) modeRequestRef.current = null;
+    });
+    modeRequestRef.current = {
+      epoch,
+      identity,
+      sessionId: session.realtime_session_id,
+      generation: session.session_generation,
+      manual,
+      promise,
+    };
+    return promise;
+  }, [compatibility, identity, requireControl]);
+  const startManualTurn = useCallback(() => {
+    let required: ReturnType<typeof requireControl>;
+    try { required = requireControl(); }
+    catch { return; }
+    const { control, session } = required;
+    if (
+      turnModeRef.current !== 'manual'
+      || mutedRef.current
+      || !supportsManualTurnControls(compatibility)
+    ) return;
+    const epoch = operationEpochRef.current;
+    const existing = manualTurnRef.current;
+    if (
+      existing
+      && existing.epoch === epoch
+      && existing.identity === identity
+      && existing.sessionId === session.realtime_session_id
+      && existing.generation === session.session_generation
+      && ['capturing', 'committing', 'complete'].includes(existing.state)
+    ) return;
+    manualTurnRef.current = {
+      epoch,
+      identity,
+      sessionId: session.realtime_session_id,
+      generation: session.session_generation,
+      clientRequestId: realtimeRequestId('manual-commit'),
+      state: 'capturing',
+    };
+    if (control.isReady) mediaRef.current?.setMuted(false);
+  }, [compatibility, identity, requireControl]);
+  const stopManualTurn = useCallback(() => {
+    if (turnModeRef.current === 'manual') mediaRef.current?.setMuted(true);
   }, []);
+  const discardManualTurn = useCallback(() => {
+    mediaRef.current?.setMuted(true);
+    manualTurnRef.current = null;
+  }, []);
+  const commitManualTurn = useCallback((): Promise<void> => {
+    let required: ReturnType<typeof requireControl>;
+    try { required = requireControl(); }
+    catch (error) { return Promise.reject(error); }
+    const { control, session } = required;
+    const operation = manualTurnRef.current;
+    const epoch = operationEpochRef.current;
+    if (
+      turnModeRef.current !== 'manual'
+      || !operation
+      || operation.epoch !== epoch
+      || operation.identity !== identity
+      || operation.sessionId !== session.realtime_session_id
+      || operation.generation !== session.session_generation
+    ) return Promise.reject(new Error('Start recording before sending a manual turn'));
+    if (operation.promise) return operation.promise;
+    mediaRef.current?.setMuted(true);
+    operation.state = 'committing';
+    const promise = control.manualAudioCommit(operation.clientRequestId, session.session_generation)
+      .then((result) => {
+        if (result.state === 'rejected') {
+          operation.state = 'failed';
+          throw new Error('No audio was captured. Start recording, speak, and send the turn again.');
+        }
+        if (result.state === 'outcome_unknown' || result.state === 'in_progress') {
+          operation.state = 'complete';
+          throw new Error('Hermes could not confirm whether the manual turn was accepted. It will not be retried automatically.');
+        }
+        if (
+          operationEpochRef.current !== epoch
+          || signatureRef.current !== identity
+          || mediaRef.current?.activeSession?.realtime_session_id !== session.realtime_session_id
+          || mediaRef.current.activeSession.session_generation !== session.session_generation
+        ) throw new Error('The manual turn belonged to a previous Realtime session');
+        operation.state = 'complete';
+      })
+      .catch((error: unknown) => {
+        if (operationEpochRef.current === epoch && operation.state === 'committing') operation.state = 'failed';
+        if (operationEpochRef.current === epoch) setStateDetail((error as Error).message);
+        throw error;
+      });
+    operation.promise = promise;
+    return promise;
+  }, [identity, requireControl]);
   const sendInput = useCallback(async (text: string) => {
     const { control, session } = requireControl();
     await control.input(realtimeRequestId('input'), text, session.session_generation);
@@ -327,17 +513,20 @@ export function useRealtimeSession({
     projection: projectionForIdentity(projection, projectionIdentityRef.current, identity),
     connected: state === 'ready',
     muted,
-    manualTurnTaking: turnMode === 'manual',
+    manualTurnTaking: modeIdentityRef.current === identity && turnMode === 'manual',
+    manualControlsAvailable: state === 'ready' && supportsManualTurnControls(compatibility),
     connect,
     close,
     setMuted,
     setManualTurnTaking,
     startManualTurn,
     stopManualTurn,
+    discardManualTurn,
+    commitManualTurn,
     sendInput,
     interruptSpeech,
     resolveApproval,
     submittingApprovalId,
     workerCommand,
-  }), [close, compatibility, connect, controlState, identity, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, submittingApprovalId, turnMode, workerCommand, interruptSpeech]);
+  }), [close, commitManualTurn, compatibility, connect, controlState, discardManualTurn, identity, mediaState, muted, projection, resolveApproval, sendInput, setManualTurnTaking, setMuted, startManualTurn, state, stateDetail, stopManualTurn, submittingApprovalId, turnMode, workerCommand, interruptSpeech]);
 }

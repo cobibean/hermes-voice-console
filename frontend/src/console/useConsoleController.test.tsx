@@ -13,9 +13,9 @@ const mocks = vi.hoisted(() => ({
   },
   realtime: {
     state: 'disabled', stateDetail: undefined, compatibility: null, mediaState: 'idle', controlState: 'idle',
-    projection: null as unknown, connected: false, muted: false, manualTurnTaking: false,
+    projection: null as unknown, connected: false, muted: false, manualTurnTaking: false, manualControlsAvailable: false,
     connect: vi.fn(), close: vi.fn(), setMuted: vi.fn(), setManualTurnTaking: vi.fn(),
-    startManualTurn: vi.fn(), stopManualTurn: vi.fn(), sendInput: vi.fn(), interruptSpeech: vi.fn(),
+    startManualTurn: vi.fn(), stopManualTurn: vi.fn(), discardManualTurn: vi.fn(), commitManualTurn: vi.fn(), sendInput: vi.fn(), interruptSpeech: vi.fn(),
     resolveApproval: vi.fn(), submittingApprovalId: null, workerCommand: vi.fn(),
   },
 }));
@@ -36,11 +36,21 @@ function deferred<T>() {
   const promise = new Promise<T>((yes) => { resolve = yes; });
   return { promise, resolve };
 }
+const getToken = async () => null;
 
 describe('useConsoleController conversation identity', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     mocks.loadMessages.mockReset();
     mocks.realtime.projection = emptyRealtimeProjection;
+    mocks.realtime.state = 'disabled';
+    mocks.realtime.mediaState = 'idle';
+    mocks.realtime.controlState = 'idle';
+    mocks.realtime.connected = false;
+    mocks.realtime.manualControlsAvailable = false;
+    mocks.realtime.manualTurnTaking = false;
+    mocks.realtime.setManualTurnTaking.mockResolvedValue(undefined);
+    mocks.realtime.commitManualTurn.mockResolvedValue(undefined);
   });
 
   it('suppresses loaded history on the same render that selects another conversation', async () => {
@@ -69,5 +79,36 @@ describe('useConsoleController conversation identity', () => {
 
     await act(async () => { historyB.resolve([{ role: 'assistant', content: 'Conversation B' }]); await historyB.promise; });
     await waitFor(() => expect(result.current.messages).toEqual([{ role: 'assistant', content: 'Conversation B' }]));
+  });
+
+  it('wires server-authoritative manual toggle and click-send only while ready and supported', async () => {
+    mocks.loadMessages.mockResolvedValue([]);
+    mocks.realtime.state = 'ready';
+    mocks.realtime.mediaState = 'connected';
+    mocks.realtime.controlState = 'ready';
+    mocks.realtime.connected = true;
+    mocks.realtime.manualControlsAvailable = true;
+    mocks.realtime.manualTurnTaking = true;
+    const bootstrap = {
+      server: { public_base_url: 'http://localhost:3000', auth_mode: 'development' as const },
+      principal: { kind: 'development', owner_key: 'owner' },
+      voice: { stt_provider: 'fake', tts_provider: 'fake', sample_rate: 16000, max_recording_seconds: 120, speak_replies_default: false },
+      targets: [{ name: 'fake', label: 'Fake', preferred_transport: 'runs', api_key_configured: true, realtime_enabled: true }],
+    };
+    const { result } = renderHook(() => useConsoleController({
+      authMode: 'development', getToken, bootstrap,
+    }));
+    await waitFor(() => expect(result.current.sessionKey).toBe('hvc_a'));
+    expect(result.current.realtime.onToggleManualTurnTaking).toBeDefined();
+    expect(result.current.realtime.onSendManualTurn).toBeDefined();
+
+    act(() => result.current.realtime.onToggleManualTurnTaking?.());
+    expect(mocks.realtime.setManualTurnTaking).toHaveBeenCalledWith(false);
+    act(() => result.current.realtime.onSendManualTurn?.());
+    expect(mocks.realtime.stopManualTurn).toHaveBeenCalledOnce();
+    expect(mocks.realtime.commitManualTurn).toHaveBeenCalledOnce();
+    act(() => result.current.realtime.onUseLegacy?.());
+    expect(mocks.realtime.close).toHaveBeenCalledOnce();
+    expect(result.current.transport).toBe('legacy');
   });
 });
