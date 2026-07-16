@@ -6,7 +6,8 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,7 @@ class RealtimeMappingStore:
             json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         ).hexdigest()
         now = time.time()
-        with self._lock, self._db:
+        with self._immediate_transaction():
             reused = self._db.execute(
                 """SELECT scope_id,operation,fingerprint,state FROM realtime_requests
                    WHERE owner_key=? AND target_name=? AND request_id=?""",
@@ -129,7 +130,7 @@ class RealtimeMappingStore:
                           response: Mapping[str, Any] | None = None) -> None:
         if state not in {"pending", "in_progress", "outcome_unknown", "complete"}:
             raise ValueError("invalid Realtime request state")
-        with self._lock, self._db:
+        with self._immediate_transaction():
             self._db.execute(
                 """UPDATE realtime_requests SET state=?,response_json=?,updated_at=?
                    WHERE owner_key=? AND target_name=? AND scope_id=? AND request_id=?""",
@@ -145,6 +146,25 @@ class RealtimeMappingStore:
                     request_id,
                 ),
             )
+
+    @contextmanager
+    def _immediate_transaction(self) -> Iterator[None]:
+        """Serialize read-check-write decisions across independent SQLite connections."""
+        with self._lock:
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                yield
+                self._db.commit()
+            except sqlite3.Error as exc:
+                self._db.rollback()
+                raise RealtimeProxyError(
+                    "realtime_store_unavailable",
+                    "Realtime durable state could not be updated",
+                    status=503,
+                ) from exc
+            except BaseException:
+                self._db.rollback()
+                raise
 
     def request_response(self, *, owner_key: str, target_name: str, scope_id: str,
                          request_id: str) -> dict[str, Any] | None:
@@ -162,7 +182,7 @@ class RealtimeMappingStore:
     def record_session(self, document: Mapping[str, Any], *, owner_key: str,
                        target_name: str, request_id: str) -> None:
         now = time.time()
-        with self._lock, self._db:
+        with self._immediate_transaction():
             existing_session = self._db.execute(
                 "SELECT * FROM realtime_sessions WHERE realtime_session_id=?",
                 (document["realtime_session_id"],),

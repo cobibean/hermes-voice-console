@@ -66,6 +66,86 @@ def parse_closed(document: Mapping[str, Any], *, conversation_id: str,
     return {"realtime_session_id": session_id, "conversation_id": conversation_id, "state": "closed"}
 
 
+def parse_activate_result(
+    document: Mapping[str, Any], *, conversation_id: str, session_id: str,
+    client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(document, client_request_id=client_request_id, operation="activate")
+    result = parse_session(
+        document,
+        conversation_id=conversation_id,
+        session_id=session_id,
+        include_sdp=False,
+    )
+    if result["state"] != "active":
+        _invalid("activation state")
+    result["client_request_id"] = client_request_id
+    return result
+
+
+def parse_delete_result(
+    document: Mapping[str, Any], *, conversation_id: str, session_id: str,
+    client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(document, client_request_id=client_request_id, operation="delete")
+    return {
+        **parse_closed(
+            document, conversation_id=conversation_id, session_id=session_id
+        ),
+        "client_request_id": client_request_id,
+    }
+
+
+def parse_input_result(
+    document: Mapping[str, Any], *, session_id: str, client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(document, client_request_id=client_request_id, operation="input")
+    if _id(document, "realtime_session_id") != session_id:
+        _mismatch("session")
+    if document.get("accepted") is not True or document.get("state") != "accepted":
+        _invalid("input acceptance")
+    return {
+        "client_request_id": client_request_id,
+        "realtime_session_id": session_id,
+        "accepted": True,
+        "state": "accepted",
+    }
+
+
+def parse_interrupt_result(
+    document: Mapping[str, Any], *, session_id: str, client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(
+        document, client_request_id=client_request_id, operation="interrupt"
+    )
+    if _id(document, "realtime_session_id") != session_id:
+        _mismatch("session")
+    if document.get("interrupted") is not True or document.get("state") != "accepted":
+        _invalid("interrupt acceptance")
+    return {
+        "client_request_id": client_request_id,
+        "realtime_session_id": session_id,
+        "interrupted": True,
+        "state": "accepted",
+    }
+
+
+def parse_approval_result(
+    document: Mapping[str, Any], *, approval_id: str, client_request_id: str,
+) -> dict[str, Any]:
+    parse_request_state(
+        document, client_request_id=client_request_id, operation="approval"
+    )
+    result = parse_approval(document, approval_id=approval_id)
+    if result["state"] not in {"resolved", "denied"}:
+        _invalid("approval resolution state")
+    if not isinstance(document.get("accepted"), bool):
+        _invalid("approval acceptance")
+    result["accepted"] = document["accepted"]
+    result["client_request_id"] = client_request_id
+    return result
+
+
 def parse_request_state(
     document: Mapping[str, Any], *, client_request_id: str,
     operation: str | None = None,

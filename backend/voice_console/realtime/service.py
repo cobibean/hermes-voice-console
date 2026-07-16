@@ -20,10 +20,13 @@ from .hermes_client import (
     RealtimeProxyError,
 )
 from .responses import (
-    parse_approval,
-    parse_closed,
+    parse_activate_result,
+    parse_approval_result,
     parse_command,
+    parse_delete_result,
     parse_events,
+    parse_input_result,
+    parse_interrupt_result,
     parse_job,
     parse_job_events,
     parse_job_list,
@@ -213,12 +216,12 @@ class RealtimeProxyService:
                 response=pending,
             )
             return pending
-        result = {
-            **parse_closed(
-                raw, conversation_id=mapping["conversation_id"], session_id=session_id
-            ),
-            "client_request_id": request_id,
-        }
+        result = parse_delete_result(
+            raw,
+            conversation_id=mapping["conversation_id"],
+            session_id=session_id,
+            client_request_id=request_id,
+        )
         self.store.update_session(session_id, state="closed")
         self.store.complete_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=session_id,
@@ -285,25 +288,21 @@ class RealtimeProxyService:
             )
             return pending
         if action == "activate":
-            result = parse_session(
+            result = parse_activate_result(
                 raw,
                 conversation_id=mapping["conversation_id"],
                 session_id=session_id,
-                include_sdp=False,
+                client_request_id=request_id,
             )
-            result["client_request_id"] = request_id
             self.store.update_session(session_id, state=result["state"])
-        else:
-            allowed = (
-                {"client_request_id", "accepted", "state"}
-                if action == "input"
-                else {"client_request_id", "realtime_session_id", "interrupted", "state"}
+        elif action == "input":
+            result = parse_input_result(
+                raw, session_id=session_id, client_request_id=request_id
             )
-            result = {key: raw[key] for key in allowed if key in raw}
-            if action == "input" and raw.get("client_request_id") != request_id:
-                raise RealtimeProxyError("target_identity_mismatch", "Hermes returned a mismatched request")
-            if action == "interrupt" and raw.get("realtime_session_id") != session_id:
-                raise RealtimeProxyError("target_identity_mismatch", "Hermes returned a mismatched session")
+        else:
+            result = parse_interrupt_result(
+                raw, session_id=session_id, client_request_id=request_id
+            )
         self.store.complete_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=session_id,
             request_id=request_id, response=result,
@@ -392,8 +391,9 @@ class RealtimeProxyService:
                 response=pending,
             )
             return pending
-        result = parse_approval(raw, approval_id=approval_id)
-        result["client_request_id"] = request_id
+        result = parse_approval_result(
+            raw, approval_id=approval_id, client_request_id=request_id
+        )
         self.store.complete_request(
             owner_key=mapping["owner_key"], target_name=target_name, scope_id=approval_id,
             request_id=request_id, response=result,
@@ -612,31 +612,45 @@ class RealtimeProxyService:
         if raw.get("answer_sdp") is not None:
             result = parse_session(raw, conversation_id=conversation_id)
         elif raw.get("state") == "closed" and raw.get("realtime_session_id"):
-            result = parse_closed(
+            session_id = validate_identifier(
+                str(raw["realtime_session_id"]), "realtime_session_id"
+            )
+            result = parse_delete_result(
                 raw,
                 conversation_id=conversation_id,
-                session_id=validate_identifier(
-                    str(raw["realtime_session_id"]), "realtime_session_id"
-                ),
+                session_id=session_id,
+                client_request_id=request_id,
             )
         elif raw.get("approval_id") is not None:
-            result = parse_approval(
+            result = parse_approval_result(
                 raw,
                 approval_id=validate_identifier(str(raw["approval_id"]), "approval_id"),
+                client_request_id=request_id,
             )
         elif raw.get("interrupted") is True:
             session_id = validate_identifier(
                 str(raw.get("realtime_session_id") or ""), "realtime_session_id"
             )
-            result = {
-                "realtime_session_id": session_id,
-                "interrupted": True,
-                "state": "accepted",
-            }
+            result = parse_interrupt_result(
+                raw, session_id=session_id, client_request_id=request_id
+            )
         elif raw.get("accepted") is True:
-            result = {"accepted": True, "state": "accepted"}
+            session_id = validate_identifier(
+                str(raw.get("realtime_session_id") or ""), "realtime_session_id"
+            )
+            result = parse_input_result(
+                raw, session_id=session_id, client_request_id=request_id
+            )
         elif raw.get("realtime_session_id") and raw.get("session_generation"):
-            result = parse_session(raw, conversation_id=conversation_id, include_sdp=False)
+            session_id = validate_identifier(
+                str(raw["realtime_session_id"]), "realtime_session_id"
+            )
+            result = parse_activate_result(
+                raw,
+                conversation_id=conversation_id,
+                session_id=session_id,
+                client_request_id=request_id,
+            )
         else:
             raise RealtimeProxyError(
                 "invalid_target_response", "Hermes returned an unknown request result"

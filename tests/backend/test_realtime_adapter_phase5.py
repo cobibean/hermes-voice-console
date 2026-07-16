@@ -558,3 +558,177 @@ def test_session_mapping_rejects_compromised_identifier_collision(tmp_path):
             request_id="request_2",
         )
     store.close()
+
+
+def test_session_mapping_collision_is_atomic_across_connections(tmp_path):
+    stores = [RealtimeMappingStore(tmp_path), RealtimeMappingStore(tmp_path)]
+    barrier = threading.Barrier(2)
+    outcomes: list[object] = []
+
+    def record(index: int) -> None:
+        barrier.wait()
+        try:
+            stores[index].record_session(
+                {
+                    "realtime_session_id": "rt_atomic_collision",
+                    "conversation_id": f"conversation_{index}",
+                    "session_generation": 1,
+                    "state": "controller_ready",
+                },
+                owner_key=f"owner_{index}",
+                target_name="fake",
+                request_id=f"request_{index}",
+            )
+            outcomes.append("accepted")
+        except RealtimeProxyError as exc:
+            outcomes.append(exc)
+
+    threads = [threading.Thread(target=record, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+    assert not any(thread.is_alive() for thread in threads)
+
+    assert outcomes.count("accepted") == 1
+    errors = [item for item in outcomes if isinstance(item, RealtimeProxyError)]
+    assert len(errors) == 1
+    assert errors[0].code == "target_identity_mismatch"
+    for store in stores:
+        store.close()
+
+
+def test_request_claim_is_atomic_across_connections(tmp_path):
+    stores = [RealtimeMappingStore(tmp_path), RealtimeMappingStore(tmp_path)]
+    barrier = threading.Barrier(2)
+    identical: list[object] = []
+
+    def claim_identical(index: int) -> None:
+        barrier.wait()
+        try:
+            identical.append(
+                stores[index].claim_request(
+                    owner_key="owner_1",
+                    target_name="fake",
+                    scope_id="conversation_1",
+                    request_id="request_identical",
+                    operation="create",
+                    payload={"turn_mode": "manual"},
+                )
+            )
+        except BaseException as exc:
+            identical.append(exc)
+
+    threads = [threading.Thread(target=claim_identical, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert all(isinstance(item, str) for item in identical)
+    assert sorted(identical) == ["new", "pending"]
+
+    barrier = threading.Barrier(2)
+    conflicting: list[object] = []
+
+    def claim_conflicting(index: int) -> None:
+        barrier.wait()
+        try:
+            conflicting.append(
+                stores[index].claim_request(
+                    owner_key="owner_1",
+                    target_name="fake",
+                    scope_id="conversation_1",
+                    request_id="request_conflicting",
+                    operation="input",
+                    payload={"text": f"value {index}"},
+                )
+            )
+        except BaseException as exc:
+            conflicting.append(exc)
+
+    threads = [threading.Thread(target=claim_conflicting, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert conflicting.count("new") == 1
+    errors = [item for item in conflicting if isinstance(item, RealtimeProxyError)]
+    assert len(errors) == 1
+    assert errors[0].code == "idempotency_conflict"
+    assert errors[0].status == 409
+    for store in stores:
+        store.close()
+
+
+def test_compromised_mutation_results_are_rejected_before_cache(console):
+    client, app, conversation_id = console
+    fake = app.state.fake_hermes_app
+    session = create_realtime(client, conversation_id, "strict_create_1").json()
+    session_id = session["realtime_session_id"]
+    generation = session["session_generation"]
+
+    fake.state.realtime_overrides["activate"] = {"client_request_id": "wrong_request"}
+    activate = client.post(
+        f"/api/realtime/sessions/{session_id}/activate?target=fake",
+        json={"client_request_id": "strict_activate_1", "session_generation": generation},
+    )
+    assert activate.status_code == 502
+    assert activate.json()["error"]["code"] == "target_identity_mismatch"
+    fake.state.realtime_overrides.pop("activate")
+
+    fake.state.realtime_overrides["input"] = {"accepted": "yes"}
+    input_result = client.post(
+        f"/api/realtime/sessions/{session_id}/input?target=fake",
+        json={
+            "client_request_id": "strict_input_1",
+            "session_generation": generation,
+            "text": "continue",
+        },
+    )
+    assert input_result.status_code == 502
+    assert input_result.json()["error"]["code"] == "invalid_target_response"
+    duplicate_input = client.post(
+        f"/api/realtime/sessions/{session_id}/input?target=fake",
+        json={
+            "client_request_id": "strict_input_1",
+            "session_generation": generation,
+            "text": "continue",
+        },
+    )
+    assert duplicate_input.status_code == 502
+    fake.state.realtime_overrides.pop("input")
+
+    fake.state.realtime_overrides["interrupt"] = {"realtime_session_id": "rt_wrong"}
+    interrupt = client.post(
+        f"/api/realtime/sessions/{session_id}/interrupt?target=fake",
+        json={"client_request_id": "strict_interrupt_1", "session_generation": generation},
+    )
+    assert interrupt.status_code == 502
+    assert interrupt.json()["error"]["code"] == "target_identity_mismatch"
+    fake.state.realtime_overrides.pop("interrupt")
+
+    fake.state.realtime_overrides["approval"] = {"accepted": "yes"}
+    approval = client.post(
+        f"/api/realtime/sessions/{session_id}/approvals/approval_1?target=fake",
+        json={
+            "client_request_id": "strict_approval_1",
+            "session_generation": generation,
+            "choice": "once",
+        },
+    )
+    assert approval.status_code == 502
+    assert approval.json()["error"]["code"] == "invalid_target_response"
+    fake.state.realtime_overrides.pop("approval")
+
+    fake.state.realtime_overrides["delete"] = {"conversation_id": "conversation_wrong"}
+    deleted = client.request(
+        "DELETE",
+        f"/api/realtime/sessions/{session_id}?target=fake",
+        json={"client_request_id": "strict_delete_1"},
+    )
+    assert deleted.status_code == 502
+    assert deleted.json()["error"]["code"] == "target_identity_mismatch"
