@@ -78,3 +78,11 @@ Hermes commit `807c417e949dde80781f3ae1c78cb4c97d8d02e9`:
 
 - Run the physical-phone acceptance matrix when the product is ready for that gate.
 - Before any production rollout, reconcile the Hermes capability branch with freshly fetched upstream `main`, rerun the same target-scoped gate, and preserve rollback evidence.
+
+## Main integration note — 2026-07-17
+
+- The tested Hermes candidate `807c417e949dde80781f3ae1c78cb4c97d8d02e9` was rebased onto the freshly fetched Nous Research `main`; its final equivalent commit is `4a94e2a157271c578e5b8a8eba2ae423f3b550d3`.
+- The full 13-commit Realtime series is published on `cobibean/hermes-agent` `main`. The Nous Research upstream was not modified.
+- Post-rebase verification passed all 107 focused Realtime, profile-access, and configuration tests.
+- The broader API and multiplex suite passed 233 of 234 tests. The remaining upstream health-detail assertion expected `ok`, while this Mac's disk-health probe correctly reported `degraded`; it is unrelated to the Realtime integration.
+- Voice Console `main` and the Hermes fork `main` are now the durable integration points for this accepted slice.
